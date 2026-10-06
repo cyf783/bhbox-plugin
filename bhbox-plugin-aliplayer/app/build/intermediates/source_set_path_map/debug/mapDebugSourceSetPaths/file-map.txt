@@ -1,0 +1,7 @@
+bh.box.plugin.ali.app-pngs-0 /Users/swifly/FreeSpace/BHBox/bhbox-plugin-aliplayer/app/build/generated/res/pngs/debug
+bh.box.plugin.ali.app-resValues-1 /Users/swifly/FreeSpace/BHBox/bhbox-plugin-aliplayer/app/build/generated/res/resValues/debug
+bh.box.plugin.ali.app-packageDebugResources-2 /Users/swifly/FreeSpace/BHBox/bhbox-plugin-aliplayer/app/build/intermediates/incremental/debug/packageDebugResources/merged.dir
+bh.box.plugin.ali.app-packageDebugResources-3 /Users/swifly/FreeSpace/BHBox/bhbox-plugin-aliplayer/app/build/intermediates/incremental/debug/packageDebugResources/stripped.dir
+bh.box.plugin.ali.app-debug-4 /Users/swifly/FreeSpace/BHBox/bhbox-plugin-aliplayer/app/build/intermediates/merged_res/debug/mergeDebugResources
+bh.box.plugin.ali.app-debug-5 /Users/swifly/FreeSpace/BHBox/bhbox-plugin-aliplayer/app/src/debug/res
+bh.box.plugin.ali.app-main-6 /Users/swifly/FreeSpace/BHBox/bhbox-plugin-aliplayer/app/src/main/res

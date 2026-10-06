@@ -1,0 +1,35 @@
+{
+  "id": "bh.box.plugin.exo",
+  "name": "EXO Player",
+  "description": "ExoPlayer (media3) 视频播放引擎插件",
+  "type": "player",
+  "mainClass": "bh.box.plugin.exo.ExoPlugin",
+  "downloadUrl": "https://h-box-release.netlify.app/release/plugins/exoplayer.apk",
+  "version": 120,
+  "versionName": "1.2.0",
+  "minSdk": 23,
+  "minAppVersion": 385,
+  "autoRun": true,
+  "params": [
+    {
+      "id": "decoder",
+      "name": "解码配置",
+      "type": "radio",
+      "value": "硬解码",
+      "options": [
+        {"name": "硬解码", "value": "硬解码"},
+        {"name": "软解码", "value": "软解码"}
+      ]
+    },
+    {
+      "id": "tunnel",
+      "name": "隧道模式",
+      "type": "radio",
+      "value": "false",
+      "options": [
+        {"name": "关闭", "value": "false"},
+        {"name": "开启", "value": "true"}
+      ]
+    }
+  ]
+}

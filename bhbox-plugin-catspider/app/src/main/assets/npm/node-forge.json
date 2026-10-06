@@ -1,0 +1,11 @@
+{
+  "name": "node-forge",
+  "version": "1.4.0",
+  "main": "./node-forge.cjs",
+  "exports": {
+    ".": {
+      "import": "./node-forge.mjs",
+      "require": "./node-forge.cjs"
+    }
+  }
+}

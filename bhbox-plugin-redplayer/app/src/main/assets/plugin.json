@@ -1,0 +1,35 @@
+{
+  "id": "bh.box.plugin.red",
+  "name": "RedPlayer",
+  "description": "小红书 REDPlayer 视频播放引擎插件，边下边播缓存",
+  "type": "player",
+  "mainClass": "bh.box.plugin.red.RedPlugin",
+  "version": 120,
+  "versionName": "1.2.0",
+  "minSdk": 23,
+  "minAppVersion": 385,
+  "autoRun": true,
+  "downloadUrl": "https://h-box-release.netlify.app/release/plugins/redplayer.apk",
+  "params": [
+    {
+      "id": "decoder",
+      "name": "解码配置",
+      "type": "radio",
+      "value": "硬解码",
+      "options": [
+        {"name": "硬解码", "value": "硬解码"},
+        {"name": "软解码", "value": "软解码"}
+      ]
+    },
+    {
+      "id": "cache",
+      "name": "磁盘缓存",
+      "type": "radio",
+      "value": "关闭",
+      "options": [
+        {"name": "关闭", "value": "关闭"},
+        {"name": "开启", "value": "开启"}
+      ]
+    }
+  ]
+}

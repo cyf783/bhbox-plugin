@@ -1,0 +1,16 @@
+{
+    "name": "catspider-deps",
+    "version": "1.0.0",
+    "private": true,
+    "description": "CatSpider 预置源依赖（纯 JS，随 APK assets 分发，运行时释放到源目录 node_modules）",
+    "dependencies": {
+        "crypto-js": "^4.2.0",
+        "lodash": "^4.17.21",
+        "hls-parser": "^0.10.7",
+        "cheerio": "^1.0.0",
+        "node-rsa": "^1.1.1",
+        "node-forge": "^1.3.0",
+        "axios": "^1.8.0",
+        "undici": "^7.19.0"
+    }
+}

@@ -1,0 +1,17 @@
+{
+  "id": "bh.box.plugin.goproxy",
+  "name": "GoProxy 插件",
+  "description": "GoProxy 代理播放服务插件",
+  "type": "service",
+  "version": 120,
+  "versionName": "1.2.0",
+  "mainClass": "bh.box.plugin.goproxy.GoProxyPlugin",
+  "downloadUrl": "https://h-box-release.netlify.app/release/plugins/goproxy.apk",
+  "minSdk": 21,
+  "minAppVersion": 386,
+  "params": [{
+    "id": "params",
+    "name": "运行参数",
+    "type": "text"
+  }]
+}

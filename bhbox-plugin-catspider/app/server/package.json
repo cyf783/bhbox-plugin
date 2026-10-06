@@ -1,0 +1,16 @@
+{
+    "name": "catspider-server",
+    "version": "1.0.0",
+    "private": true,
+    "type": "module",
+    "description": "CatSpider nodejs source loader server (CatVodOpen nodejs spider host).",
+    "scripts": {
+        "build": "node build.js"
+    },
+    "dependencies": {
+        "fastify": "^4.26.2"
+    },
+    "devDependencies": {
+        "esbuild": "^0.20.2"
+    }
+}

@@ -1,0 +1,25 @@
+﻿{
+  "id": "bh.box.plugin.ali",
+  "name": "AliYunPlayer",
+  "description": "阿里云播放器 SDK 插件，支持硬解码/软解码切换、多轨道选择",
+  "type": "player",
+  "mainClass": "bh.box.plugin.ali.AliPlugin",
+  "downloadUrl": "https://h-box-release.netlify.app/release/plugins/aliplayer.apk",
+  "version": 120,
+  "versionName": "1.2.0",
+  "minSdk": 23,
+  "minAppVersion": 385,
+  "autoRun": true,
+  "params": [
+    {
+      "id": "decoder",
+      "name": "解码配置",
+      "type": "radio",
+      "value": "硬解码",
+      "options": [
+        {"name": "硬解码", "value": "硬解码"},
+        {"name": "软解码", "value": "软解码"}
+      ]
+    }
+  ]
+}

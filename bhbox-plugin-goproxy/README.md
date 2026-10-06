@@ -1,0 +1,82 @@
+# GoProxy 代理服务插件
+
+> 插件 ID：`bh.box.plugin.goproxy` · 类型：service（后台代理服务） · 版本：`1.2.0` · 构建 minSdk：`24`
+
+## 简介
+
+内嵌 Go 编译的 GoProxy 代理播放服务，为部分需要中转/代理才能访问的源提供本地代理能力。
+
+## 插件标识
+
+| 字段 | 值 |
+| --- | --- |
+| 插件 ID | `bh.box.plugin.goproxy` |
+| 类型 | service（后台代理服务） |
+| 入口类 (mainClass) | `bh.box.plugin.goproxy.GoProxyPlugin` |
+| 版本号 | `120`（`1.2.0`） |
+| 最低 Android 版本（构建） | API 24 |
+| 发布下载地址 | https://h-box-release.netlify.app/release/plugins/goproxy.apk |
+
+> 注：`plugin.json` 中声明的运行时最低版本为 API 21，但构建脚本以 minSdk 24 编译；实际运行受二者共同约束。
+
+## 技术栈与关键依赖
+
+- 插件接口基类来自 `com.github.cyf783:bhbox-catvod:1.0.0`（compileOnly，与主工程 catvod 模块二进制一致）
+- Android Gradle Plugin 8.5.1，compileSdk 36，targetSdk 28，仅构建 `arm64-v8a` ABI
+- 内嵌 Go 编译二进制 `assets/go_proxy_video`
+- 依赖以 `api fileTree(dir: "libs")` 引入（libs 目录按需要放置 jar/aar）
+
+## 目录结构
+
+```
+.
+├── app/
+│   ├── build.gradle          # :app 模块构建脚本（命名空间、依赖、混淆）
+│   ├── libs/                 # 预编译依赖（AAR/JAR/SO，按需）
+│   ├── proguard-rules.pro
+│   └── src/main/
+│       ├── AndroidManifest.xml
+│       ├── assets/           # plugin.json + 运行所需资源（二进制/脚本/运行时）
+│       ├── java/             # 插件入口类（即 plugin.json 中的 mainClass）
+│       └── jniLibs/          # 原生库（.so，按需，仅 arm64-v8a）
+├── build.gradle              # 根工程：AGP 版本与 ext 配置（compileSdk/minSdk/targetSdk 等）
+├── gradle.properties
+├── settings.gradle           # rootProject.name = bhbox-plugin-<name>
+├── gradle/                   # 共享脚本（如 proguard-dictionary.gradle）
+├── gradlew / gradlew.bat
+└── local.properties          # 本地 SDK 路径（不入库）
+```
+> 注：部分子目录（libs / jniLibs / 特定 assets）仅在有对应需求时存在。
+
+## 构建要求
+
+- **JDK 17**：AGP 8.5.1 需要 JDK 17（构建脚本优先选用 `~/.sdkman/candidates/java/17.0.15-zulu`，其次 Android Studio JBR）。
+- **Android SDK**：Platform 36（compileSdk 36）+ 对应 Build Tools。
+- **Gradle**：项目 wrapper 自带（无需单独安装），直接执行 `./gradlew` 即可。
+- **ABI**：仅支持 `arm64-v8a`。
+
+## 构建
+
+```bash
+./gradlew :app:copyApk --no-build-cache
+```
+
+构建产物（release APK）会被复制到工程内的 `apk/plugins/<name>.apk`。
+
+> 多插件统一打包：回到仓库根目录执行 `./build-all.sh`（`build-all.sh` 会逐个调用各插件的 `:app:copyApk`，并将全部 APK 汇总到 `BHBox/apk/plugins/`）。
+
+## 与 BHBox 集成
+
+本插件是一个**独立 APK**，由 BHBox 主程序的 `PluginManager` 通过 `DexClassLoader` 动态加载，安装目录为 `/files/plugins/{id}/`。
+插件自身元数据定义在 `app/src/main/assets/plugin.json`（含名称、类型、入口类、版本、配置参数等）。
+开发接口（`Plugin` / `ServicePlugin` / `SpiderPlugin` / `PluginCache` 等）由 `com.github.cyf783:bhbox-catvod` AAR 提供。
+
+## 配置参数
+
+插件安装后可在 BHBox 设置中对以下参数进行调整：
+
+- params（运行参数，text）：传入 GoProxy 的启动参数
+
+## 许可
+
+与主工程 BHBox 一致，采用 **GNU AGPL v3** 许可证。

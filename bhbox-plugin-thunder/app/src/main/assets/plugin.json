@@ -1,0 +1,13 @@
+{
+  "id": "bh.box.plugin.extractor.thunder",
+  "name": "迅雷播放插件",
+  "description": "支持 thunder:// magnet: .torrent ed2k: ftp: 协议边下边播",
+  "type": "extractor",
+  "mainClass": "bh.box.plugin.extractor.thunder.ThunderExtractorPlugin",
+  "downloadUrl": "https://h-box-release.netlify.app/release/plugins/thunder.apk",
+  "version": 120,
+  "versionName": "1.2.0",
+  "minSdk": 23,
+  "minAppVersion": 385,
+  "params": []
+}

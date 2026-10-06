@@ -1,0 +1,13 @@
+{
+  "id": "bh.box.plugin.extractor.youtube",
+  "name": "YouTube 播放插件",
+  "description": "支持 youtube.com/youtu.be 链接（含播放列表）DASH 播放",
+  "type": "extractor",
+  "mainClass": "bh.box.plugin.extractor.youtube.YoutubeExtractorPlugin",
+  "downloadUrl": "https://h-box-release.netlify.app/release/plugins/youtube.apk",
+  "version": 120,
+  "versionName": "1.2.0",
+  "minSdk": 23,
+  "minAppVersion": 385,
+  "params": []
+}

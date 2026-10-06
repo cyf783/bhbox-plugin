@@ -1,0 +1,11 @@
+{
+  "name": "crypto-js",
+  "version": "4.2.0",
+  "main": "./crypto-js.cjs",
+  "exports": {
+    ".": {
+      "import": "./crypto-js.mjs",
+      "require": "./crypto-js.cjs"
+    }
+  }
+}

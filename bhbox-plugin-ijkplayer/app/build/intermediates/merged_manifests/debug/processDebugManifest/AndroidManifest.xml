@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="bh.box.plugin.ijk"
+    android:versionCode="120"
+    android:versionName="1.2.0" >
+
+    <uses-sdk
+        android:minSdkVersion="23"
+        android:targetSdkVersion="28" />
+
+    <application
+        android:debuggable="true"
+        android:extractNativeLibs="true" />
+
+</manifest>

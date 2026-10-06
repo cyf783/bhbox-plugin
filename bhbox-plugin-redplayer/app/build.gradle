@@ -1,0 +1,41 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'bh.box.plugin.red'
+    compileSdk rootProject.ext.compileSdk
+
+    defaultConfig {
+        applicationId "bh.box.plugin.red"
+        minSdk 23
+        targetSdk rootProject.ext.targetSdk
+        versionCode 120
+        versionName "1.2.0"
+        ndk { abiFilters "arm64-v8a" }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled true
+            shrinkResources true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+
+    // 插件 so 由 PluginManager 解压到磁盘后经 DexClassLoader 加载，APK 内压缩存储即可（官方 mmap 直读场景才需要未压缩对齐）
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
+        }
+    }
+}
+
+dependencies {
+    compileOnly 'com.github.cyf783:bhbox-catvod:1.0.0'
+    // REDPlayer SDK（由 /Users/swifly/FreeSpace/Box/REDPlayer 源码编译产出的 AAR，含 Java 层与 9 个 so）
+    implementation files('libs/OpenRedPlayerCore-release.aar')
+}
+
+// 零依赖自写混淆字典任务（共享脚本，取代 cleverpumpkin proguard-dictionaries-generator 插件）
+apply from: "$rootDir/gradle/proguard-dictionary.gradle"

@@ -1,0 +1,14 @@
+{
+  "id": "bh.box.plugin.phpspider",
+  "name": "PHP Spider 插件",
+  "description": "支持PHP T3 Spider插件",
+  "type": "spider",
+  "spider": "php",
+  "mainClass": "bh.box.plugin.phpspider.PhpSpiderPlugin",
+  "downloadUrl": "https://h-box-release.netlify.app/release/plugins/phpspider.apk",
+  "version": 110,
+  "versionName": "1.1.0",
+  "minSdk": 23,
+  "minAppVersion": 383,
+  "depends": ["bh.box.plugin.php"]
+}

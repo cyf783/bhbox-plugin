@@ -1,0 +1,48 @@
+{
+  "id": "bh.box.plugin.ijk",
+  "name": "IJK Player",
+  "description": "IJKPlayer 视频播放引擎插件",
+  "type": "player",
+  "mainClass": "bh.box.plugin.ijk.IjkPlugin",
+  "downloadUrl": "https://h-box-release.netlify.app/release/plugins/ijkplayer.apk",
+  "version": 120,
+  "versionName": "1.2.0",
+  "minSdk": 23,
+  "minAppVersion": 385,
+  "autoRun": true,
+  "params": [
+    {
+      "id": "decoder",
+      "name": "解码配置",
+      "type": "radio",
+      "value": "硬解码",
+      "options": [
+        {"name": "硬解码", "value": "硬解码"},
+        {"name": "软解码", "value": "软解码"}
+      ]
+    },
+    {
+      "id": "cache",
+      "name": "缓存配置",
+      "type": "radio",
+      "value": "false",
+      "options": [
+        {"name": "关闭", "value": "false"},
+        {"name": "开启", "value": "true"}
+      ]
+    },
+    {
+      "id": "logLevel",
+      "name": "日志级别",
+      "type": "radio",
+      "value": "静音",
+      "options": [
+        {"name": "静音", "value": "静音"},
+        {"name": "错误", "value": "错误"},
+        {"name": "警告", "value": "警告"},
+        {"name": "信息", "value": "信息"},
+        {"name": "调试", "value": "调试"}
+      ]
+    }
+  ]
+}

@@ -1,0 +1,73 @@
+{
+  "id": "bh.box.plugin.mpv",
+  "name": "MPV Player",
+  "description": "MPV 视频播放引擎插件，高性能硬件加速解码",
+  "type": "player",
+  "mainClass": "bh.box.plugin.mpv.MpvPlugin",
+  "downloadUrl": "https://h-box-release.netlify.app/release/plugins/mpvplayer.apk",
+  "version": 120,
+  "versionName": "1.2.0",
+  "minSdk": 23,
+  "minAppVersion": 385,
+  "autoRun": true,
+  "params": [
+    {
+      "id": "decoder",
+      "name": "解码配置",
+      "type": "radio",
+      "value": "硬解码",
+      "options": [
+        {"name": "硬解码", "value": "硬解码"},
+        {"name": "软解码", "value": "软解码"}
+      ]
+    },
+    {
+      "id": "gpu_next",
+      "name": "GPU Next",
+      "type": "radio",
+      "value": "false",
+      "options": [
+        {"name": "关闭", "value": "false"},
+        {"name": "开启", "value": "true"}
+      ]
+    },
+    {
+      "id": "vulkan",
+      "name": "Vulkan 渲染",
+      "type": "radio",
+      "value": "false",
+      "options": [
+        {"name": "关闭", "value": "false"},
+        {"name": "开启", "value": "true"}
+      ]
+    },
+    {
+      "id": "audio_passthrough",
+      "name": "音频直通",
+      "type": "radio",
+      "value": "true",
+      "options": [
+        {"name": "关闭", "value": "false"},
+        {"name": "开启", "value": "true"}
+      ]
+    },
+    {
+      "id": "libass_subtitle",
+      "name": "字幕渲染",
+      "type": "radio",
+      "value": "default",
+      "description": "默认由应用统一渲染内置字幕；libass 由内核渲染特效字幕到画面",
+      "options": [
+        {"name": "默认", "value": "default"},
+        {"name": "libass", "value": "libass"}
+      ]
+    },
+    {
+      "id": "mpv_conf",
+      "name": "自定义 mpv.conf",
+      "type": "file",
+      "value": "",
+      "description": "导入自定义 mpv 配置文件，格式与 mpv 原生一致"
+    }
+  ]
+}

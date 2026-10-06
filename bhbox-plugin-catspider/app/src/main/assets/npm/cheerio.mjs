@@ -1,0 +1,11 @@
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
+const mod = require('./cheerio.cjs');
+export const contains = mod["contains"];
+export const merge = mod["merge"];
+export const loadBuffer = mod["loadBuffer"];
+export const stringStream = mod["stringStream"];
+export const decodeStream = mod["decodeStream"];
+export const fromURL = mod["fromURL"];
+export const load = mod["load"];
+export default mod;

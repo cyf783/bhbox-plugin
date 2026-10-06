@@ -1,0 +1,13 @@
+{
+  "id": "bh.box.plugin.extractor.jianpian",
+  "name": "荐片播放插件",
+  "description": "支持 jianpian:// tvbox-xg:// ftp: 协议 P2P 边下边播",
+  "type": "extractor",
+  "mainClass": "bh.box.plugin.extractor.jianpian.JianPianExtractorPlugin",
+  "downloadUrl": "https://h-box-release.netlify.app/release/plugins/jianpian.apk",
+  "version": 120,
+  "versionName": "1.2.0",
+  "minSdk": 23,
+  "minAppVersion": 385,
+  "params": []
+}

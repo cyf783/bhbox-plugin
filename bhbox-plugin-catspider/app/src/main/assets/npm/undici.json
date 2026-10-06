@@ -1,0 +1,11 @@
+{
+  "name": "undici",
+  "version": "7.29.1",
+  "main": "./undici.cjs",
+  "exports": {
+    ".": {
+      "import": "./undici.mjs",
+      "require": "./undici.cjs"
+    }
+  }
+}

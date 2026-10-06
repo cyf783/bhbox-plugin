@@ -1,0 +1,38 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'bh.box.plugin.php'
+    compileSdk rootProject.ext.compileSdk
+
+    defaultConfig {
+        applicationId "bh.box.plugin.php"
+        minSdk rootProject.ext.minSdk
+        targetSdk rootProject.ext.targetSdk
+        versionCode 110
+        versionName "1.1.0"
+        ndk { abiFilters "arm64-v8a" }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled true
+            shrinkResources true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
+        }
+    }
+}
+
+dependencies {
+    compileOnly 'com.github.cyf783:bhbox-catvod:1.0.0'
+}
+
+// 零依赖自写混淆字典任务（共享脚本，取代 cleverpumpkin proguard-dictionaries-generator 插件）
+apply from: "$rootDir/gradle/proguard-dictionary.gradle"

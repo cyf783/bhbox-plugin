@@ -1,0 +1,13 @@
+{
+  "id": "bh.box.plugin.pyspider",
+  "name": "Python Spider 插件",
+  "description": "支持Python T3 Spider插件",
+  "type": "spider",
+  "spider": "py",
+  "mainClass": "bh.box.plugin.pyspider.PySpiderPlugin",
+  "downloadUrl": "https://h-box-release.netlify.app/release/plugins/pyspider.apk",
+  "version": 110,
+  "versionName": "1.1.0",
+  "minSdk": 21,
+  "minAppVersion": 383
+}

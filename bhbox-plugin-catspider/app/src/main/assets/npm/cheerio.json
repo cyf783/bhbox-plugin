@@ -1,0 +1,11 @@
+{
+  "name": "cheerio",
+  "version": "1.2.0",
+  "main": "./cheerio.cjs",
+  "exports": {
+    ".": {
+      "import": "./cheerio.mjs",
+      "require": "./cheerio.cjs"
+    }
+  }
+}

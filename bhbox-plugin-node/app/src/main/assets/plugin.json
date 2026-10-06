@@ -1,0 +1,12 @@
+{
+  "id": "bh.box.plugin.node",
+  "name": "Node.js 运行时",
+  "description": "为其它插件提供 Node.js 可执行运行时。卸载前请先卸载依赖它的插件。",
+  "type": "runtime",
+  "mainClass": "bh.box.plugin.node.NodeRuntimePlugin",
+  "downloadUrl": "https://h-box-release.netlify.app/release/plugins/node.apk",
+  "version": 110,
+  "versionName": "1.1.0",
+  "minSdk": 23,
+  "minAppVersion": 383
+}

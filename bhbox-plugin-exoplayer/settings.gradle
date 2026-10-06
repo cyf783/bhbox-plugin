@@ -1,0 +1,33 @@
+pluginManagement {
+    repositories {
+        maven { url 'https://mirrors.huaweicloud.com/repository/maven/' }
+        maven { url 'https://mirrors.huaweicloud.com/repository/google/' }
+        maven { url 'https://mirrors.huaweicloud.com/repository/gradle-plugin/' }
+        maven { url 'https://maven.pkg.jetbrains.space/public/p/compose/dev' }
+        gradlePluginPortal()
+        mavenCentral()
+        google()
+    }
+}
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositories {
+        maven { url 'https://jitpack.io' }
+        maven { url "https://maven.aliyun.com/repository/releases" }
+        maven { url 'https://mirrors.huaweicloud.com/repository/central/' }
+        maven { url 'https://mirrors.huaweicloud.com/repository/maven/' }
+        maven { url 'https://mirrors.huaweicloud.com/repository/google/' }
+        google()
+        mavenCentral()
+        mavenLocal()
+        maven {
+            url "http://4thline.org/m2"
+            allowInsecureProtocol = true
+        }
+        maven { url 'https://oss.sonatype.org/content/repositories/snapshots/' }
+        maven { url 'https://repo1.maven.org/maven2/' }
+    }
+}
+
+include ':app'
+rootProject.name = "bhbox-plugin-exoplayer"
