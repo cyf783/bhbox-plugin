@@ -1,13 +1,13 @@
 {
   "id": "bh.box.plugin.qjsspider",
   "name": "QuickJS Spider 插件",
-  "description": "基于QuickJS支持drpy2和cat.js T3 Spider插件",
+  "description": "基于QuickJS支持drpy2、drpy3和cat.js T3 Spider插件（drpy3 api写drpy3.js, ext写站源）",
   "type": "spider",
   "spider": "js",
   "mainClass": "bh.box.plugin.qjsspider.QjsSpiderPlugin",
   "downloadUrl": "https://h-box-release.netlify.app/release/plugins/qjsspider.apk",
-  "version": 110,
-  "versionName": "1.1.0",
+  "version": 120,
+  "versionName": "1.2.0",
   "minSdk": 23,
   "minAppVersion": 383
 }

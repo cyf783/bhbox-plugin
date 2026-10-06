@@ -49,7 +49,7 @@ public class QjsSpiderPlugin implements ISpiderPlugin {
         try {
             recent = key;
             if (spiders.containsKey(key)) return spiders.get(key);
-            Spider spider = new JsSpider(key, api);
+            Spider spider = new JsSpider(key, api, ext);
             spider.siteKey = key;
             spider.init(Init.context(), ext);
             spiders.put(key, spider);
