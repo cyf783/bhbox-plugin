@@ -1,5 +1,6 @@
 plugins {
     id 'com.android.application' version '8.5.1' apply false
+    id 'com.chaquo.python' version '15.0.1' apply false
 }
 
 // 以下 ext 与 bhbox 根工程保持一致，供 :app 模块 build.gradle 通过 rootProject.ext.* 引用
