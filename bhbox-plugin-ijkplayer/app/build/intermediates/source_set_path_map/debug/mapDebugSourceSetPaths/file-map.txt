@@ -1,7 +1,0 @@
-bh.box.plugin.ijk.app-pngs-0 /Users/swifly/FreeSpace/BHBox/bhbox-plugin-ijkplayer/app/build/generated/res/pngs/debug
-bh.box.plugin.ijk.app-resValues-1 /Users/swifly/FreeSpace/BHBox/bhbox-plugin-ijkplayer/app/build/generated/res/resValues/debug
-bh.box.plugin.ijk.app-packageDebugResources-2 /Users/swifly/FreeSpace/BHBox/bhbox-plugin-ijkplayer/app/build/intermediates/incremental/debug/packageDebugResources/merged.dir
-bh.box.plugin.ijk.app-packageDebugResources-3 /Users/swifly/FreeSpace/BHBox/bhbox-plugin-ijkplayer/app/build/intermediates/incremental/debug/packageDebugResources/stripped.dir
-bh.box.plugin.ijk.app-debug-4 /Users/swifly/FreeSpace/BHBox/bhbox-plugin-ijkplayer/app/build/intermediates/merged_res/debug/mergeDebugResources
-bh.box.plugin.ijk.app-debug-5 /Users/swifly/FreeSpace/BHBox/bhbox-plugin-ijkplayer/app/src/debug/res
-bh.box.plugin.ijk.app-main-6 /Users/swifly/FreeSpace/BHBox/bhbox-plugin-ijkplayer/app/src/main/res
