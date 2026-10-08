@@ -87,6 +87,17 @@ function isGbk(label) {
     return l === 'gbk' || l === 'gb2312' || l === 'gb18030';
 }
 
+// Node 式微任务/宏任务调度：emscripten 胶水（wasm 运行时）依赖 setImmediate/clearImmediate/queueMicrotask
+if (typeof globalThis.setImmediate !== 'function') {
+    globalThis.setImmediate = function (fn, ...args) { return setTimeout(() => fn(...args), 0); };
+}
+if (typeof globalThis.clearImmediate !== 'function') {
+    globalThis.clearImmediate = function (id) { clearTimeout(id); };
+}
+if (typeof globalThis.queueMicrotask !== 'function') {
+    globalThis.queueMicrotask = function (fn) { return Promise.resolve().then(fn); };
+}
+
 if (typeof globalThis.TextEncoder === 'undefined') {
     globalThis.TextEncoder = class TextEncoder {
         constructor(label) { this.encoding = isGbk(label) ? 'gbk' : 'utf-8'; }
@@ -419,12 +430,75 @@ const subtleImpl = (() => {
     };
 })();
 
+// Node 风格同步 crypto：drpy3 源常走 require('crypto').createHash/createCipheriv（bundle 环境下
+// require('crypto') 会命中本对象），实现为 __drpy3host 桥的薄封装（update+final 同步拼接）。
+function asBytes(data, enc) {
+    if (typeof data !== 'string') return new Uint8Array(data);
+    if (enc === 'hex') return hexDecode(data);
+    if (enc === 'base64') return b64Decode(data);
+    return new TextEncoder().encode(data);
+}
+
+function cipherStream(alg, key, iv, encrypt) {
+    const a = String(alg).toLowerCase();
+    const mode = a.includes('gcm') ? 'AES-GCM' : a.includes('cbc') ? 'AES-CBC' : 'AES-ECB';
+    const chunks = [];
+    let aad = null, tagBits = 128, tagBytes = null;
+    const out = (buf, enc) => enc === 'base64' ? buf.toString('base64') : enc === 'hex' ? buf.toString('hex') : buf;
+    return {
+        setAutoPadding() { return this; }, // 仅支持默认 PKCS#7 填充
+        setAAD(b) { aad = b64Encode(new Uint8Array(b)); return this; },
+        setAuthTag(t) { tagBytes = new Uint8Array(t); return this; },
+        update(data, enc) { chunks.push(asBytes(data, enc)); return this; },
+        final(enc) {
+            let data = Buffer.concat(chunks);
+            if (encrypt) {
+                const r = __drpy3host.aesEnc(mode, b64Encode(new Uint8Array(key)),
+                    iv ? b64Encode(new Uint8Array(iv)) : '', b64Encode(data), aad, tagBits);
+                return out(Buffer.from(b64Decode(r)), enc);
+            }
+            // GCM 桥语义为 ct||tag：解密时把 setAuthTag 的 tag 并到密文尾
+            if (tagBytes) data = Buffer.concat([data, Buffer.from(tagBytes)]);
+            const r = __drpy3host.aesDec(mode, b64Encode(new Uint8Array(key)),
+                iv ? b64Encode(new Uint8Array(iv)) : '', b64Encode(data), aad, tagBits);
+            return out(Buffer.from(b64Decode(r)), enc);
+        }
+    };
+}
+
 globalThis.crypto = {
     getRandomValues(arr) {
         for (let i = 0; i < arr.length; i++) arr[i] = Math.floor(Math.random() * 256);
         return arr;
     },
-    subtle: subtleImpl
+    subtle: subtleImpl,
+    createHash(alg) {
+        const chunks = [];
+        return {
+            update(data, enc) { chunks.push(asBytes(data, enc)); return this; },
+            digest(out) {
+                const h = __drpy3host.digest(String(alg), b64Encode(Buffer.concat(chunks)));
+                if (out === 'hex') return hexEncode(b64Decode(h));
+                if (out === 'base64') return h;
+                return Buffer.from(b64Decode(h));
+            }
+        };
+    },
+    createCipheriv(alg, key, iv) { return cipherStream(alg, key, iv, true); },
+    createDecipheriv(alg, key, iv) { return cipherStream(alg, key, iv, false); },
+    createHmac(alg, key) {
+        const keyB64 = b64Encode(asBytes(key));
+        const chunks = [];
+        return {
+            update(data, enc) { chunks.push(asBytes(data, enc)); return this; },
+            digest(out) {
+                const h = __drpy3host.hmacSign(keyB64, b64Encode(Buffer.concat(chunks)), String(alg));
+                if (out === 'hex') return hexEncode(b64Decode(h));
+                if (out === 'base64') return h;
+                return Buffer.from(b64Decode(h));
+            }
+        };
+    }
 };
 
 // ═══ cheerio（cat.js 内置纯 JS 版，drpy3 shim 要求 so.load 形态） ═══
@@ -440,8 +514,9 @@ globalThis.fjs = {
         const action = msg.action;
         if (action === 'req') {
             const o = msg.options || {};
+            // drpyS 语义：1=Uint8Array（经 Java buffer=2 base64 中转），2=base64 字符串原样，其余=文本
             const wantBytes = o.buffer === 1;
-            const opts = Object.assign({}, o, { buffer: wantBytes ? 2 : 0 });
+            const opts = Object.assign({}, o, { buffer: wantBytes || o.buffer === 2 ? 2 : 0 });
             const res = JSON.parse(__drpy3host.req(String(msg.url), JSON.stringify(opts)));
             if (wantBytes && typeof res.content === 'string') {
                 res.content = typeof Uint8Array.fromBase64 === 'function'

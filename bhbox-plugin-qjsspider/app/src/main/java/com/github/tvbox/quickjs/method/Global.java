@@ -327,6 +327,12 @@ public class Global {
         return result;
     }
 
+    /** drpy3（drpyS 语义）4 参版：aesX(input, mode, key, iv) = 加密，明文入、base64 出 */
+    @JSMethod
+    public String aesX(String input, String mode, String key, String iv) {
+        return Crypto.aes(mode, true, input, false, key, iv, true);
+    }
+
     @Keep
     @JSMethod
     public String rsaX(String mode, boolean pub, boolean encrypt, String input, boolean inBase64, String key, boolean outBase64) {

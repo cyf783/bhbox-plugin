@@ -258,6 +258,7 @@ public class JsSpider extends com.github.catvod.crawler.Spider {
         Log.e("Drpy3", "adapter 求值");
         ctx.evaluateModule(JsLibAsset.read("js/lib/drpy3-adapter.js"), "assets://js/lib/drpy3-adapter.js");
         Log.e("Drpy3", "bootstrap 源码");
+        Drpy3Host.setSource(source);
         Async.run((JSObject) ctx.getGlobalObject(), "__drpy3bootstrap", content, key, source).get();
         jsObject = (JSObject) ctx.getProperty(ctx.getGlobalObject(), "__JS_SPIDER__");
         if (jsObject == null)

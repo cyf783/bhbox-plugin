@@ -4,9 +4,11 @@ import android.util.Base64;
 
 import com.github.catvod.Init;
 import com.github.catvod.net.OkHttp;
+import com.github.catvod.utils.UriUtil;
 import com.github.tvbox.quickjs.bean.Req;
 import com.github.tvbox.quickjs.utils.Connect;
 import com.github.tvbox.quickjs.utils.JsLibAsset;
+import com.github.tvbox.quickjs.utils.Module;
 import com.whl.quickjs.wrapper.JSObject;
 import com.whl.quickjs.wrapper.QuickJSContext;
 
@@ -55,6 +57,27 @@ import okhttp3.Response;
  */
 public class Drpy3Host {
 
+    /** 源地址基：随源相对资产（如央视频 wasm 解密胶水 ./_lib.*.js）的解析基准，由 JsSpider 装载源码时设置 */
+    private static volatile String sourceBase;
+
+    public static void setSource(String source) {
+        sourceBase = source;
+    }
+
+    /** args: path。相对路径先按源地址解析（Module.fetch 支持 http/file/assets），兜底读插件 assets */
+    private static Object loadAsset(Object[] args) throws Exception {
+        String path = args.length > 0 && args[0] != null ? args[0].toString() : "";
+        if (path.isEmpty()) return "";
+        if (sourceBase != null && (path.startsWith("./") || path.startsWith("../"))) {
+            try {
+                String content = Module.get().fetch(UriUtil.resolve(sourceBase, path));
+                if (content != null && !content.isEmpty()) return content;
+            } catch (Throwable ignored) {
+            }
+        }
+        return JsLibAsset.read(path);
+    }
+
     public static void register(QuickJSContext ctx) {
         JSObject host = ctx.createJSObject();
         host.set("req", args -> req(ctx, args));
@@ -64,7 +87,7 @@ public class Drpy3Host {
         host.set("deflate", args -> zip(args, Mode.DEFLATE));
         host.set("inflate", args -> zip(args, Mode.INFLATE));
         host.set("getProxy", args -> getProxy(args));
-        host.set("loadAsset", args -> args.length > 0 && args[0] != null ? JsLibAsset.read(args[0].toString()) : "");
+        host.set("loadAsset", args -> safe(Drpy3Host::loadAsset, args));
         // crypto.subtle 后端（drpy3-shim.js 的 WebCrypto 实现，base64 进出）
         host.set("digest", args -> safe(Drpy3Host::digest, args));
         host.set("aesEnc", args -> safe(a -> aes(a, true), args));
@@ -174,7 +197,7 @@ public class Drpy3Host {
         return b64(MessageDigest.getInstance(normHash(args[0])).digest(unb64(args[1])));
     }
 
-    /** args: alg("AES-GCM"|"AES-CBC"), key, iv, data, aad, tagBits；GCM 密文与 WebCrypto 一致为 ct||tag */
+    /** args: alg("AES-GCM"|"AES-CBC"|"AES-ECB"), key, iv, data, aad, tagBits；GCM 密文与 WebCrypto 一致为 ct||tag */
     private static Object aes(Object[] args, boolean encrypt) throws Exception {
         SecretKey key = new SecretKeySpec(unb64(args[1]), "AES");
         Cipher cipher;
@@ -183,6 +206,9 @@ public class Drpy3Host {
             cipher = Cipher.getInstance("AES/GCM/NoPadding");
             cipher.init(encrypt ? Cipher.ENCRYPT_MODE : Cipher.DECRYPT_MODE, key, new GCMParameterSpec(tagBits, unb64(args[2])));
             if (args.length > 4 && args[4] != null && args[4].toString().length() > 0) cipher.updateAAD(unb64(args[4]));
+        } else if (args[0].toString().contains("ECB")) {
+            cipher = Cipher.getInstance("AES/ECB/PKCS5Padding");
+            cipher.init(encrypt ? Cipher.ENCRYPT_MODE : Cipher.DECRYPT_MODE, key);
         } else {
             cipher = Cipher.getInstance("AES/CBC/PKCS5Padding");
             cipher.init(encrypt ? Cipher.ENCRYPT_MODE : Cipher.DECRYPT_MODE, key, new IvParameterSpec(unb64(args[2])));
