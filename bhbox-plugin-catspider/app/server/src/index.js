@@ -96,9 +96,12 @@ app.all(`${PREFIX}/:name/*`, async (request, reply) => {
     // 源依赖 request.server.prefix（如构造 /proxy 播放地址）与 request.server.inject（自检），
     // 通配分发下 request.server 是根实例（prefix=''），注入带正确前缀的 server 视图：
     // Object.create 继承根实例全部能力（inject 等），仅覆盖 prefix。
+    // prefix 中的源名必须 URL 编码：播放地址会交给播放器直接请求，AliPlayer(curl) 不做
+    // 路径规范化，原始中文/[] 会被 node llhttp 严格模式拒绝(400 Bad Request)；
+    // 编码后 fastify 路由参数仍自动 decode，与源名映射一致。
     const scoped = Object.create(request);
     Object.defineProperty(scoped, 'server', {
-        value: Object.create(request.server, { prefix: { value: `${PREFIX}/${name}`, enumerable: true } }),
+        value: Object.create(request.server, { prefix: { value: `${PREFIX}/${encodeURIComponent(name)}`, enumerable: true } }),
     });
     return handler(scoped, reply);
 });
