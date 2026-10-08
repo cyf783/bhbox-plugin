@@ -6,8 +6,8 @@
   "spider": "js",
   "mainClass": "bh.box.plugin.qjsspider.QjsSpiderPlugin",
   "downloadUrl": "https://h-box-release.netlify.app/release/plugins/qjsspider.apk",
-  "version": 120,
-  "versionName": "1.2.0",
+  "version": 121,
+  "versionName": "1.2.1",
   "minSdk": 23,
   "minAppVersion": 383
 }
