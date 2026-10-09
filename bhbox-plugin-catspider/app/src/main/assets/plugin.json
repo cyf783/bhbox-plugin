@@ -6,8 +6,8 @@
   "spider": "cat",
   "mainClass": "bh.box.plugin.catspider.CatSpiderPlugin",
   "downloadUrl": "https://h-box-release.netlify.app/release/plugins/catspider.apk",
-  "version": 112,
-  "versionName": "1.1.2",
+  "version": 113,
+  "versionName": "1.1.3",
   "minSdk": 23,
   "minAppVersion": 383,
   "depends": ["bh.box.plugin.node"]

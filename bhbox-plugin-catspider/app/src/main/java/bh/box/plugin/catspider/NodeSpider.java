@@ -77,6 +77,18 @@ public class NodeSpider extends Spider {
         resolveSourceFile();
     }
 
+    /**
+     * 同步上报 T4 /init,把站点 ext 送达源侧(源注册的 POST /init handler)。
+     * 宿主拿到 Spider 后会立即请求 home/category——若此处异步,ext 尚未进源,
+     * 点击分类即无数据,因此必须阻塞等待响应(本机请求,开销可忽略)。
+     * 失败静默:源可能未注册 /init(404 无害);server 瞬态故障由 httpPost 的自愈重试兜底。
+     */
+    public void initRemote() {
+        JsonObject body = new JsonObject();
+        if (!TextUtils.isEmpty(extend)) body.addProperty("ext", extend);
+        httpPost("init", body.toString());
+    }
+
     public boolean isNewFile() {
         return newFile;
     }

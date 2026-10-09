@@ -81,6 +81,8 @@ public class CatSpiderPlugin implements ISpiderPlugin {
                     LOG.i("CatSpider", "server 未运行，重启自愈");
                     startServer();
                     ((NodeSpider) cached).setBaseUrl(serverManager.getBaseUrl());
+                    // server 重启后源侧 init 状态（ext）已随进程丢失，重发一次
+                    ((NodeSpider) cached).initRemote();
                 }
                 return cached;
             }
@@ -98,6 +100,9 @@ public class CatSpiderPlugin implements ISpiderPlugin {
 
             spider.setBaseUrl(serverManager.getBaseUrl());
             spider.siteKey = key;
+            // server 就绪后同步送达 ext（源注册的 /init）——宿主拿到 Spider 立即请求
+            // home/category，异步会导致 ext 迟到、点击分类无数据
+            spider.initRemote();
             spiders.put(key, spider);
             return spider;
         } catch (Throwable e) {
