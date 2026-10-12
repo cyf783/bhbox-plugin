@@ -49,10 +49,12 @@ public class NodeSpider extends Spider {
     /** 本机 node 服务地址（server 启动后由插件注入） */
     private String baseUrl;
 
-    /** 源路由名（文件名去 .js） */
+    /** 源路由名（= 源目录名 = md5(源身份)，与 server 端 basename 推导一致） */
     private String routeName;
     /** 本地源文件 */
     private File sourceFile;
+    /** 本源独占的隔离目录（cat/<md5(源身份)>/），主文件与相对依赖均落于此 */
+    private File sourceDir;
     /** init 时下载/拷贝了新文件（server 需重启加载） */
     private boolean newFile;
     /** 站点级 extend（可 JSON 解析时作为 body.ext 传递） */
@@ -107,68 +109,73 @@ public class NodeSpider extends Spider {
 
     // ==================== 源文件解析与下载 ====================
 
+    /**
+     * 源文件按「源身份」隔离缓存：身份 = http/clan 源的完整 URL（clan 已转地址）或 file:// 的绝对路径，
+     * 再叠加站点 ext。模板源（同一 js 通过不同 ext 配置出多个站源）的 /init ext 存于路由级模块状态，
+     * ext 不同必须落为不同目录/路由 —— 文件路径不同则 ESM 各自实例化模块，ext 状态互不覆盖；
+     * 否则后加载站点的 ext 覆盖先加载的，站源间串读配置（如 host）。
+     * 每源独占目录 cat/<md5(身份)>/，主文件固定 <md5>.js（与目录同名，server 端 basename 即路由名），
+     * 相对依赖落同目录下原相对路径 —— 不同源即使 URL 同名（如都叫 index.js）或依赖同路径也互不污染。
+     */
     private void resolveSourceFile() {
         routeName = null;
         sourceFile = null;
+        sourceDir = null;
         newFile = false;
         if (TextUtils.isEmpty(api)) return;
 
-        File dir = CatSpiderPlugin.sourceCache;
-        dir.mkdirs();
-
+        String identity;
+        File localSrc = null;
         if (api.startsWith("file://")) {
-            File src = new File(api.replace("file://", ""));
-            if (src.exists()) {
-                String name = src.getName();
-                sourceFile = new File(dir, name.endsWith(".js") ? name : name + ".js");
-                if (!sourceFile.exists()) {
-                    Io.copy(src, sourceFile);
-                    newFile = true;
-                    fetchRelativeDeps(sourceFile, Io.read(sourceFile), null, src.getParentFile());
-                }
-            } else {
+            localSrc = new File(api.replace("file://", ""));
+            if (!localSrc.exists()) {
                 LOG.e("CatSpider", "file:// 源不存在: " + api);
                 return;
             }
+            identity = localSrc.getAbsolutePath();
         } else if (api.startsWith("http") || api.startsWith("clan://")) {
-            String url = api;
-            if (url.startsWith("clan://")) url = Util.clanToAddress(url);
-            String name = extractUrlName(url);
-            sourceFile = new File(dir, name);
-            if (!sourceFile.exists()) {
-                try (Response response = OkHttp.newCall(url).execute()) {
-                    if (response.isSuccessful() && response.body() != null) {
-                        String code = response.body().string();
-                        Io.write(sourceFile, code);
-                        newFile = true;
-                        fetchRelativeDeps(sourceFile, code, url, null);
-                    } else {
-                        LOG.e("CatSpider", "下载源失败 HTTP " + response.code() + ": " + url);
-                        sourceFile = null;
-                        return;
-                    }
-                } catch (Exception e) {
-                    LOG.e("CatSpider", "下载源失败: " + api);
-                    sourceFile = null;
-                    return;
-                }
-            }
+            identity = api.startsWith("clan://") ? Util.clanToAddress(api) : api;
         } else {
             LOG.e("CatSpider", "不支持的 api 形式: " + api);
             return;
         }
 
-        String fileName = sourceFile.getName();
-        routeName = fileName.endsWith(".js") ? fileName.substring(0, fileName.length() - 3) : fileName;
-    }
+        // 源身份叠加站点 ext：ext 不同 → 目录/路由/ESM 模块实例均不同，隔离路由级 ext 状态
+        String sourceIdentity = TextUtils.isEmpty(extend) ? identity : identity + "\n" + extend;
+        String hash = Util.md5(sourceIdentity);
+        sourceDir = new File(CatSpiderPlugin.sourceCache, hash);
+        sourceDir.mkdirs();
+        sourceFile = new File(sourceDir, hash + ".js");
 
-    private String extractUrlName(String url) {
-        String name = url.substring(url.lastIndexOf('/') + 1);
-        int queryIdx = name.indexOf('?');
-        if (queryIdx > 0) name = name.substring(0, queryIdx);
-        if (TextUtils.isEmpty(name)) name = "index.js";
-        if (!name.endsWith(".js")) name = name + ".js";
-        return name;
+        if (!sourceFile.exists()) {
+            try {
+                if (localSrc != null) {
+                    Io.copy(localSrc, sourceFile);
+                    fetchRelativeDeps(sourceFile, Io.read(sourceFile), null, localSrc.getParentFile());
+                } else {
+                    try (Response response = OkHttp.newCall(identity).execute()) {
+                        if (response.isSuccessful() && response.body() != null) {
+                            String code = response.body().string();
+                            Io.write(sourceFile, code);
+                            fetchRelativeDeps(sourceFile, code, identity, null);
+                        } else {
+                            LOG.e("CatSpider", "下载源失败 HTTP " + response.code() + ": " + identity);
+                            sourceFile = null;
+                            sourceDir = null;
+                            return;
+                        }
+                    }
+                }
+                newFile = true;
+            } catch (Exception e) {
+                LOG.e("CatSpider", "获取源失败: " + api);
+                sourceFile = null;
+                sourceDir = null;
+                return;
+            }
+        }
+
+        routeName = hash;
     }
 
     // ==================== 相对路径依赖拉取 ====================
@@ -200,7 +207,7 @@ public class NodeSpider extends Spider {
                         continue;
                     }
                     writeDep(rel, null);
-                    Io.copy(src, new File(CatSpiderPlugin.sourceCache, rel));
+                    Io.copy(src, new File(sourceDir, rel));
                     body = Io.read(src);
                 }
                 scanDeps(rel, body, queue, seen);
@@ -210,9 +217,9 @@ public class NodeSpider extends Spider {
         }
     }
 
-    /** 落盘依赖到源目录相对路径（body 为 null 时仅建目录，供后续 Io.copy；Io.create 不建父目录） */
+    /** 落盘依赖到本源隔离目录的相对路径（body 为 null 时仅建目录，供后续 Io.copy；Io.create 不建父目录） */
     private void writeDep(String rel, String body) {
-        File target = new File(CatSpiderPlugin.sourceCache, rel);
+        File target = new File(sourceDir, rel);
         File parent = target.getParentFile();
         if (parent != null) parent.mkdirs();
         if (body != null) Io.write(target, body);

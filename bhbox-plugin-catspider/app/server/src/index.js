@@ -62,18 +62,22 @@ async function loadSource(file, bust = false) {
     return { ok: true, route };
 }
 
+// 源固定布局：<sourcesDir>/<md5(源URL)>/<md5>.js（宿主 NodeSpider 维护，主文件与所在目录同名，
+// 相对依赖落同目录下原相对路径，实现每源隔离）。路由名 = 文件名去 .js = md5。
 async function loadAll() {
-    let files = [];
+    let entries = [];
     try {
-        files = readdirSync(sourcesDir).filter((f) => f.endsWith('.js')).sort();
+        entries = readdirSync(sourcesDir, { withFileTypes: true });
     } catch (e) {
         console.error('readdir failed: ' + e.message);
     }
-    for (const file of files) {
+    for (const entry of entries) {
+        if (!entry.isDirectory()) continue;
+        const file = `${entry.name}/${entry.name}.js`;
         try {
             await loadSource(file);
-        } catch (e) {
-            console.error(`load failed: ${file}: ${e.message}`);
+        } catch (e2) {
+            console.error(`load failed: ${file}: ${e2.message}`);
         }
     }
 }
@@ -108,10 +112,11 @@ app.all(`${PREFIX}/:name/*`, async (request, reply) => {
 
 app.get('/check', async () => ({ run: true, dir: sourcesDir, sources: [...sources.keys()] }));
 
-// 热加载：运行中注册新源或重载已更新源文件（bust=true 穿透 ESM import 缓存）
+// 热加载：运行中注册新源或重载已更新源文件（bust=true 穿透 ESM import 缓存）。
+// 只接受 <md5>/<md5>.js 形式的一级相对路径（布局由宿主维护，严格校验防路径逃逸）。
 app.post('/load', async (request, reply) => {
     const file = String(request.body?.file || '');
-    if (!file.endsWith('.js') || file.includes('/') || file.includes('\\') || file.includes('..')) {
+    if (!/^[0-9a-f]{32}\/[0-9a-f]{32}\.js$/.test(file)) {
         reply.code(400);
         return { ok: false, error: 'invalid file name' };
     }

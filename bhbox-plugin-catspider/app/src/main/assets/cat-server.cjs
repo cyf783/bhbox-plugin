@@ -35017,17 +35017,20 @@ async function loadSource(file, bust = false) {
   return { ok: true, route };
 }
 async function loadAll() {
-  let files = [];
+  let entries = [];
   try {
-    files = (0, import_fs.readdirSync)(sourcesDir).filter((f) => f.endsWith(".js")).sort();
+    entries = (0, import_fs.readdirSync)(sourcesDir, { withFileTypes: true });
   } catch (e) {
     console.error("readdir failed: " + e.message);
   }
-  for (const file of files) {
+  for (const entry of entries) {
+    if (!entry.isDirectory())
+      continue;
+    const file = `${entry.name}/${entry.name}.js`;
     try {
       await loadSource(file);
-    } catch (e) {
-      console.error(`load failed: ${file}: ${e.message}`);
+    } catch (e2) {
+      console.error(`load failed: ${file}: ${e2.message}`);
     }
   }
 }
@@ -35054,7 +35057,7 @@ app.all(`${PREFIX}/:name/*`, async (request, reply) => {
 app.get("/check", async () => ({ run: true, dir: sourcesDir, sources: [...sources.keys()] }));
 app.post("/load", async (request, reply) => {
   const file = String(request.body?.file || "");
-  if (!file.endsWith(".js") || file.includes("/") || file.includes("\\") || file.includes("..")) {
+  if (!/^[0-9a-f]{32}\/[0-9a-f]{32}\.js$/.test(file)) {
     reply.code(400);
     return { ok: false, error: "invalid file name" };
   }

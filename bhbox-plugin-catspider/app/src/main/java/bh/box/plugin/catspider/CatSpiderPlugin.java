@@ -17,7 +17,6 @@ import com.github.catvod.utils.Plugin;
 import com.google.gson.JsonObject;
 
 import java.io.File;
-import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Set;
@@ -138,10 +137,12 @@ public class CatSpiderPlugin implements ISpiderPlugin {
             startServer();
             return;
         }
-        if (isNewFile || !loadedFiles.contains(sourceFile.getName())) {
-            LOG.i("CatSpider", "热加载源文件: " + sourceFile.getName());
-            if (hotLoad(sourceFile.getName())) {
-                loadedFiles.add(sourceFile.getName());
+        // 源固定布局 cat/<md5>/<md5>.js，loadedFiles 以「<md5>/<md5>.js」相对路径为 key
+        String relPath = relPath(sourceFile);
+        if (isNewFile || !loadedFiles.contains(relPath)) {
+            LOG.i("CatSpider", "热加载源文件: " + relPath);
+            if (hotLoad(relPath)) {
+                loadedFiles.add(relPath);
                 return;
             }
             LOG.e("CatSpider", "热加载失败，回退重启 server");
@@ -154,6 +155,11 @@ public class CatSpiderPlugin implements ISpiderPlugin {
             LOG.i("CatSpider", "server 探测失败，重启自愈");
             startServer();
         }
+    }
+
+    /** 源文件相对源目录的路径（布局固定为 <md5>/<md5>.js，一层目录） */
+    private String relPath(File sourceFile) {
+        return sourceFile.getParentFile().getName() + "/" + sourceFile.getName();
     }
 
     /** 调用 server 的 /load 接口热加载单个源文件（bust 穿透 import 缓存） */
@@ -193,9 +199,16 @@ public class CatSpiderPlugin implements ISpiderPlugin {
 
             serverManager.start(nodeBinary, serverJs, sourcesDir);
 
+            // 预填已加载集合：扫描一级子目录（布局固定 <md5>/<md5>.js，与 server loadAll 一致）
             loadedFiles.clear();
-            String[] files = sourcesDir.list((dir, name) -> name.endsWith(".js"));
-            if (files != null) loadedFiles.addAll(Arrays.asList(files));
+            String[] dirs = sourcesDir.list();
+            if (dirs != null) {
+                for (String dir : dirs) {
+                    if (new File(new File(sourcesDir, dir), dir + ".js").exists()) {
+                        loadedFiles.add(dir + "/" + dir + ".js");
+                    }
+                }
+            }
         }
     }
 
@@ -271,10 +284,13 @@ public class CatSpiderPlugin implements ISpiderPlugin {
         if (serverManager != null) {
             serverManager.stop();
         }
-        // 只清理下载的源文件，保留安装时部署的 package.json/node_modules 基础设施
-        String[] files = sourceCache.list((dir, name) -> name.endsWith(".js"));
-        if (files != null) {
-            for (String name : files) Io.delete(new File(sourceCache, name));
+        // 只清理源缓存（<md5> 隔离目录 + 旧版遗留的根级散文件），保留安装时部署的 package.json/node_modules 基础设施
+        String[] children = sourceCache.list();
+        if (children != null) {
+            for (String name : children) {
+                if (name.equals("node_modules") || name.equals("package.json")) continue;
+                Io.delete(new File(sourceCache, name));
+            }
         }
     }
 }

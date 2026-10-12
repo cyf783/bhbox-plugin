@@ -225,17 +225,30 @@ public class PhpSpider extends Spider {
 
         File cacheDir = Path.php();
 
-        File localFile = new File(cacheDir, scriptName);
-        this.localScriptPath = scriptName;
+        // 本地内置脚本（php_ 前缀）：按原名引用 docRoot 已部署文件，不参与远程脚本缓存
+        if (api.startsWith("php_")) {
+            String name = api.substring(4) + ".php";
+            if (new File(cacheDir, name).exists()) {
+                this.localScriptPath = name;
+            } else {
+                this.localScriptPath = null;
+                LOG.e("PHP", "本地脚本不存在: " + name);
+            }
+            return;
+        }
+
+        // 远程/file 源：缓存名 = md5(归一化源身份)_末段名。不同站源即使末段同名
+        // （如都叫 index.php）也各自独立落盘，避免读到上一个站源缓存；URL 含 query 视为不同源
+        String url = api.startsWith("clan://") ? Util.clanToAddress(api) : api;
+        String identity = url.startsWith("file://") ? url.replace("file://", "") : url;
+        String cacheName = Util.md5(identity) + "_" + scriptName;
+
+        File localFile = new File(cacheDir, cacheName);
+        this.localScriptPath = cacheName;
 
         if (localFile.exists()) return;
 
         try {
-            String url = api;
-            if (url.startsWith("clan://")) {
-                url = Util.clanToAddress(url);
-            }
-
             if (url.startsWith("http")) {
                 try (Response response = OkHttp.newCall(url).execute()) {
                     if (response.isSuccessful() && response.body() != null) {
@@ -246,15 +259,6 @@ public class PhpSpider extends Spider {
                 File srcFile = new File(url.replace("file://", ""));
                 if (srcFile.exists()) {
                     Io.copy(srcFile, localFile);
-                }
-            } else if (url.startsWith("php_")) {
-                String name = url.substring(4) + ".php";
-                File local = new File(cacheDir, name);
-                if (local.exists()) {
-                    this.localScriptPath = name;
-                } else {
-                    this.localScriptPath = null;
-                    LOG.e("PHP", "本地脚本不存在: " + name);
                 }
             }
         } catch (Exception e) {
