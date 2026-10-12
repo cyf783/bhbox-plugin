@@ -251,7 +251,8 @@ public class NodeSpider extends Spider {
                 stack.addLast(seg);
             }
         }
-        return String.join("/", stack);
+        // String.join 为 API 26+，Android 6（API 23）无此方法
+        return TextUtils.join("/", stack);
     }
 
     /** 主文件 URL 同目录拼接依赖相对路径（剥离 query 防止拼出非法 URL） */
