@@ -59,7 +59,13 @@ public class Global {
         Map<String, List<Method>> methodGroups = new HashMap<>();
         for (Method method : getClass().getMethods()) {
             if (!method.isAnnotationPresent(JSMethod.class)) continue;
-            methodGroups.computeIfAbsent(method.getName(), k -> new ArrayList<>()).add(method);
+            // Map.computeIfAbsent 及 j.u.f.Function lambda 均为 API 24+，Android 6（API 23）会 NoClassDefFoundError
+            List<Method> group = methodGroups.get(method.getName());
+            if (group == null) {
+                group = new ArrayList<>();
+                methodGroups.put(method.getName(), group);
+            }
+            group.add(method);
         }
         for (Map.Entry<String, List<Method>> entry : methodGroups.entrySet()) {
             List<Method> methods = entry.getValue();
@@ -86,7 +92,13 @@ public class Global {
         Map<String, List<Method>> methodGroups = new HashMap<>();
         for (Method method : clazz.getMethods()) {
             if (!method.isAnnotationPresent(JSMethod.class)) continue;
-            methodGroups.computeIfAbsent(method.getName(), k -> new ArrayList<>()).add(method);
+            // Map.computeIfAbsent 及 j.u.f.Function lambda 均为 API 24+，Android 6（API 23）会 NoClassDefFoundError
+            List<Method> group = methodGroups.get(method.getName());
+            if (group == null) {
+                group = new ArrayList<>();
+                methodGroups.put(method.getName(), group);
+            }
+            group.add(method);
         }
         for (Map.Entry<String, List<Method>> entry : methodGroups.entrySet()) {
             List<Method> methods = entry.getValue();
