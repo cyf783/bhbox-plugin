@@ -49,7 +49,9 @@ public class Module {
         else if (name.startsWith("assets")) content = JsLibAsset.read(name);
         else if (name.startsWith("lib/")) content = JsLibAsset.read("js/" + name);
         else content = JsLibAsset.readLib(libs, name);
-        cache.put(name, content);
+        // 仅缓存非空结果：拉取失败（如启动时本地 9978 服务器未就绪）不落缓存，
+        // 保证下次 getSpider 重建 JsSpider 时真正重试，而非永久命中空串
+        if (content != null && !content.isEmpty()) cache.put(name, content);
         return content;
     }
 

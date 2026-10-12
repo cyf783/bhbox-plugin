@@ -227,6 +227,10 @@ public class JsSpider extends com.github.catvod.crawler.Spider {
         String spider = "__JS_SPIDER__";
         String global = "globalThis." + spider;
         String content = Module.get().fetch(api);
+        // 拉取失败（空）时快速失败：由 QjsSpiderPlugin.getSpider 转为 SpiderNull（不缓存），
+        // 下次访问重建实例即重试；否则空内容会静默产出无 __JS_SPIDER__ 的半初始化引擎
+        if (content == null || content.isEmpty())
+            throw new Exception("[spider] 源脚本拉取失败: " + api);
         if (content.startsWith("//bb")) {
             cat = true;
             ctx.execute(Module.get().bb(content));
