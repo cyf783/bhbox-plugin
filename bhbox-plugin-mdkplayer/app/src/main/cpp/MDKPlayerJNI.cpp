@@ -125,6 +125,10 @@ MDK_JNI(jlong, MdkPlayer_nativeCreate)
         delete p;
     });
     auto p = pr->player;
+    // 宿主五种比例模式（默认/16:9/4:3/填充/原始）全部由 TextureRenderView 的 view 几何实现，
+    // 内核须拉伸填满 surface（IgnoreAspectRatio=0）；mdk 默认 KeepAspectRatio 会 letterbox 回
+    // 原生比例，导致强制比例模式画面内容不变、看似"一闪还原"
+    p->setAspectRatio(0.0f);
     std::weak_ptr<jobject> w = pr->spobj;
     p->setTimeout(20000, [w](int64_t t){
         PostEvent(w, MEDIA_ERROR, MEDIA_ERROR_TIMED_OUT);
