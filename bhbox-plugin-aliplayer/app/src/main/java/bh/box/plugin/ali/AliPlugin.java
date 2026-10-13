@@ -1,6 +1,6 @@
 package bh.box.plugin.ali;
 
-import android.util.Log;
+import com.github.catvod.utils.LOG;
 
 import com.github.catvod.plugin.IPlayerPlugin;
 import com.github.catvod.plugin.player.PlayerFactory;
@@ -20,7 +20,7 @@ public class AliPlugin implements IPlayerPlugin {
 
     @Override
     public void init() {
-        Log.i("AliPlayer", "plugin initialized");
+        LOG.i("AliPlayer", "plugin initialized");
     }
 
     @Override

@@ -4,7 +4,7 @@ import android.content.Context;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
-import android.util.Log;
+import com.github.catvod.utils.LOG;
 import android.view.Surface;
 import android.view.SurfaceHolder;
 
@@ -548,7 +548,7 @@ public class MpvPlayer extends Player implements MPVLib.EventObserver {
         try {
             Integer count = MPVLib.getPropertyInt("track-list/count");
             if (count == null || count <= 0) {
-                Log.d(TAG, "updateTrackInfo: track-list/count unavailable");
+                LOG.d(TAG, "updateTrackInfo: track-list/count unavailable");
                 return;
             }
             TrackInfo info = new TrackInfo();
@@ -591,11 +591,11 @@ public class MpvPlayer extends Player implements MPVLib.EventObserver {
                 }
             }
             mTrackInfoCache = info;
-            Log.d(TAG, "updateTrackInfo: audio=" + info.getAudio().size()
+            LOG.d(TAG, "updateTrackInfo: audio=" + info.getAudio().size()
                     + " video=" + info.getVideo().size()
                     + " subtitle=" + info.getSubtitle().size());
         } catch (Exception e) {
-            Log.d(TAG, "updateTrackInfo error: " + e.getMessage());
+            LOG.d(TAG, "updateTrackInfo error: " + e.getMessage());
         }
     }
 }

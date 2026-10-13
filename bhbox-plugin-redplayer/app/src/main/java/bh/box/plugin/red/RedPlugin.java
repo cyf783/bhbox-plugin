@@ -1,6 +1,6 @@
 package bh.box.plugin.red;
 
-import android.util.Log;
+import com.github.catvod.utils.LOG;
 
 import com.github.catvod.plugin.IPlayerPlugin;
 import com.github.catvod.plugin.player.PlayerFactory;
@@ -27,9 +27,9 @@ public class RedPlugin implements IPlayerPlugin {
     public void init() {
         try {
             RedMediaPlayer.loadLibrariesOnce(null, null);
-            Log.i("RedPlayer", "native libs loaded");
+            LOG.i("RedPlayer", "native libs loaded");
         } catch (Throwable t) {
-            Log.e("RedPlayer", "load native libs failed: " + Log.getStackTraceString(t));
+            LOG.e("RedPlayer", "load native libs failed\n" + android.util.Log.getStackTraceString(t));
         }
     }
 

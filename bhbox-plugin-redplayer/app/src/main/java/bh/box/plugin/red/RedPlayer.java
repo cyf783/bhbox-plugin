@@ -2,7 +2,7 @@ package bh.box.plugin.red;
 
 import android.content.Context;
 import android.content.res.AssetFileDescriptor;
-import android.util.Log;
+import com.github.catvod.utils.LOG;
 import android.view.Surface;
 import android.view.SurfaceHolder;
 
@@ -50,7 +50,7 @@ public class RedPlayer extends Player implements IMediaPlayer.OnErrorListener
 
     @Override
     public void initPlayer() {
-        Log.i(TAG, "initPlayer, hardwareDecode=" + mHardwareDecode);
+        LOG.i(TAG, "initPlayer, hardwareDecode=" + mHardwareDecode);
         mMediaPlayer = new RedMediaPlayer();
         setOptions();
         mMediaPlayer.setOnErrorListener(this);
@@ -74,7 +74,7 @@ public class RedPlayer extends Player implements IMediaPlayer.OnErrorListener
             File cacheDir = new File(Path.player(), "redplayer");
             if (!cacheDir.exists()) cacheDir.mkdirs();
             mMediaPlayer.setVideoCacheDir(cacheDir.getAbsolutePath());
-            Log.i(TAG, "video cache enabled: " + cacheDir.getAbsolutePath());
+            LOG.i(TAG, "video cache enabled: " + cacheDir.getAbsolutePath());
         }
     }
 
@@ -83,11 +83,11 @@ public class RedPlayer extends Player implements IMediaPlayer.OnErrorListener
     @Override
     public void setDataSource(String path, Map<String, String> headers) {
         if (path == null) return;
-        Log.i(TAG, "setDataSource: " + path);
+        LOG.i(TAG, "setDataSource: " + path);
         try {
             mMediaPlayer.setDataSource(path, headers);
         } catch (Exception e) {
-            Log.e(TAG, "setDataSource failed", e);
+            LOG.e(TAG, "setDataSource failed\n" + android.util.Log.getStackTraceString(e));
             if (mEventListener != null) mEventListener.onError(-1, Util.getRootCauseMessage(e));
         }
     }
@@ -132,11 +132,11 @@ public class RedPlayer extends Player implements IMediaPlayer.OnErrorListener
     @Override
     public void prepareAsync() {
         if (mMediaPlayer == null) return;
-        Log.i(TAG, "prepareAsync");
+        LOG.i(TAG, "prepareAsync");
         try {
             mMediaPlayer.prepareAsync();
         } catch (IllegalStateException e) {
-            Log.e(TAG, "prepareAsync failed", e);
+            LOG.e(TAG, "prepareAsync failed\n" + android.util.Log.getStackTraceString(e));
             if (mEventListener != null) mEventListener.onError(-1, Util.getRootCauseMessage(e));
         }
     }
@@ -201,12 +201,12 @@ public class RedPlayer extends Player implements IMediaPlayer.OnErrorListener
 
     @Override
     public void setSurface(Surface surface) {
-        Log.i(TAG, "setSurface: " + surface + ", valid=" + (surface != null && surface.isValid()));
+        LOG.i(TAG, "setSurface: " + surface + ", valid=" + (surface != null && surface.isValid()));
         if (mMediaPlayer == null) return;
         try {
             mMediaPlayer.setSurface(surface);
         } catch (Exception e) {
-            Log.e(TAG, "setSurface failed", e);
+            LOG.e(TAG, "setSurface failed\n" + android.util.Log.getStackTraceString(e));
         }
     }
 
@@ -287,13 +287,13 @@ public class RedPlayer extends Player implements IMediaPlayer.OnErrorListener
 
     @Override
     public void onCompletion(IMediaPlayer mp) {
-        Log.i(TAG, "onCompletion");
+        LOG.i(TAG, "onCompletion");
         if (mEventListener != null) mEventListener.onCompletion();
     }
 
     @Override
     public boolean onError(IMediaPlayer mp, int what, int extra) {
-        Log.e(TAG, "onError: what=" + what + ", extra=" + extra);
+        LOG.e(TAG, "onError: what=" + what + ", extra=" + extra);
         // 出错后需要停止掉播放器
         stop();
         if (mEventListener != null) mEventListener.onError(what, "播放出错 (" + what + "," + extra + ")");
@@ -302,7 +302,7 @@ public class RedPlayer extends Player implements IMediaPlayer.OnErrorListener
 
     @Override
     public void onPrepared(IMediaPlayer mp, com.xingin.openredplayercore.core.impl.RedPlayerEvent event) {
-        Log.i(TAG, "onPrepared");
+        LOG.i(TAG, "onPrepared");
         if (mEventListener != null) {
             mEventListener.onPrepared();
             mEventListener.onInfo(PLAYER_INFO_RENDERING_START, 0);
@@ -327,7 +327,7 @@ public class RedPlayer extends Player implements IMediaPlayer.OnErrorListener
 
     @Override
     public boolean onInfo(IMediaPlayer mp, int what, int extra, com.xingin.openredplayercore.core.impl.RedPlayerEvent event) {
-        if (what == 701 || what == 702 || what == 3) Log.d(TAG, "onInfo: what=" + what + ", extra=" + extra);
+        if (what == 701 || what == 702 || what == 3) LOG.d(TAG, "onInfo: what=" + what + ", extra=" + extra);
         if (mEventListener == null) return false;
         switch (what) {
             case 701: // MEDIA_INFO_BUFFERING_START

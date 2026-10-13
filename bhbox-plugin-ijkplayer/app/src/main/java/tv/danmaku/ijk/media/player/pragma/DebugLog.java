@@ -17,7 +17,7 @@
 
 package tv.danmaku.ijk.media.player.pragma;
 
-import android.util.Log;
+import com.github.catvod.utils.LOG;
 
 import java.util.Locale;
 
@@ -31,96 +31,96 @@ public class DebugLog {
 
     public static void e(String tag, String msg) {
         if (ENABLE_ERROR) {
-            Log.e(tag, msg);
+            LOG.e(tag, msg);
         }
     }
 
     public static void e(String tag, String msg, Throwable tr) {
         if (ENABLE_ERROR) {
-            Log.e(tag, msg, tr);
+            LOG.e(tag, msg + "\n" + android.util.Log.getStackTraceString(tr));
         }
     }
 
     public static void efmt(String tag, String fmt, Object... args) {
         if (ENABLE_ERROR) {
             String msg = String.format(Locale.US, fmt, args);
-            Log.e(tag, msg);
+            LOG.e(tag, msg);
         }
     }
 
     public static void i(String tag, String msg) {
         if (ENABLE_INFO) {
-            Log.i(tag, msg);
+            LOG.i(tag, msg);
         }
     }
 
     public static void i(String tag, String msg, Throwable tr) {
         if (ENABLE_INFO) {
-            Log.i(tag, msg, tr);
+            LOG.i(tag, msg + "\n" + android.util.Log.getStackTraceString(tr));
         }
     }
 
     public static void ifmt(String tag, String fmt, Object... args) {
         if (ENABLE_INFO) {
             String msg = String.format(Locale.US, fmt, args);
-            Log.i(tag, msg);
+            LOG.i(tag, msg);
         }
     }
 
     public static void w(String tag, String msg) {
         if (ENABLE_WARN) {
-            Log.w(tag, msg);
+            LOG.w(tag, msg);
         }
     }
 
     public static void w(String tag, String msg, Throwable tr) {
         if (ENABLE_WARN) {
-            Log.w(tag, msg, tr);
+            LOG.w(tag, msg + "\n" + android.util.Log.getStackTraceString(tr));
         }
     }
 
     public static void wfmt(String tag, String fmt, Object... args) {
         if (ENABLE_WARN) {
             String msg = String.format(Locale.US, fmt, args);
-            Log.w(tag, msg);
+            LOG.w(tag, msg);
         }
     }
 
     public static void d(String tag, String msg) {
         if (ENABLE_DEBUG) {
-            Log.d(tag, msg);
+            LOG.d(tag, msg);
         }
     }
 
     public static void d(String tag, String msg, Throwable tr) {
         if (ENABLE_DEBUG) {
-            Log.d(tag, msg, tr);
+            LOG.d(tag, msg + "\n" + android.util.Log.getStackTraceString(tr));
         }
     }
 
     public static void dfmt(String tag, String fmt, Object... args) {
         if (ENABLE_DEBUG) {
             String msg = String.format(Locale.US, fmt, args);
-            Log.d(tag, msg);
+            LOG.d(tag, msg);
         }
     }
 
     public static void v(String tag, String msg) {
         if (ENABLE_VERBOSE) {
-            Log.v(tag, msg);
+            LOG.d(tag, msg);
         }
     }
 
     public static void v(String tag, String msg, Throwable tr) {
         if (ENABLE_VERBOSE) {
-            Log.v(tag, msg, tr);
+            LOG.d(tag, msg + "\n" + android.util.Log.getStackTraceString(tr));
         }
     }
 
     public static void vfmt(String tag, String fmt, Object... args) {
         if (ENABLE_VERBOSE) {
             String msg = String.format(Locale.US, fmt, args);
-            Log.v(tag, msg);
+            LOG.d(tag, msg);
         }
     }
 

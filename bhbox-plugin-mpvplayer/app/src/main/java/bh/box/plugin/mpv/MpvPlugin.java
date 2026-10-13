@@ -2,7 +2,7 @@ package bh.box.plugin.mpv;
 
 import static bh.box.plugin.mpv.MpvPlayerFactory.ID_PLUGIN;
 
-import android.util.Log;
+import com.github.catvod.utils.LOG;
 
 import com.github.catvod.plugin.IPlayerPlugin;
 import com.github.catvod.plugin.player.PlayerFactory;
@@ -59,22 +59,22 @@ public class MpvPlugin implements IPlayerPlugin {
             }
         }
         if (libDir == null) {
-            Log.e("MpvPlayer", "libplayer.so not found under: " + pluginDir.getAbsolutePath()
+            LOG.e("MpvPlayer", "libplayer.so not found under: " + pluginDir.getAbsolutePath()
                     + "；abis: " + Arrays.toString(android.os.Build.SUPPORTED_ABIS));
             return;
         }
-        Log.d("MpvPlayer", "loading native libs from: " + libDir);
+        LOG.d("MpvPlayer", "loading native libs from: " + libDir);
         for (String name : NATIVE_LIB_ORDER) {
             File so = new File(libDir, name);
             if (so.exists()) {
-                Log.d("MpvPlayer", "  loading: " + name);
+                LOG.d("MpvPlayer", "  loading: " + name);
                 try {
                     System.load(so.getAbsolutePath());
                 } catch (UnsatisfiedLinkError e) {
-                    Log.e("MpvPlayer", "  failed to load " + name + ": " + e.getMessage());
+                    LOG.e("MpvPlayer", "  failed to load " + name + ": " + e.getMessage());
                 }
             } else {
-                Log.d("MpvPlayer", "  skip (not found): " + name);
+                LOG.d("MpvPlayer", "  skip (not found): " + name);
             }
         }
     }

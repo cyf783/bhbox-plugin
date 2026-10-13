@@ -5,7 +5,7 @@ import android.content.res.AssetFileDescriptor;
 import android.os.Handler;
 import android.os.Looper;
 import android.text.TextUtils;
-import android.util.Log;
+import com.github.catvod.utils.LOG;
 import android.view.Surface;
 import android.view.SurfaceHolder;
 
@@ -76,7 +76,7 @@ public class AliPlayer extends Player
 
     @Override
     public void initPlayer() {
-        Log.i(TAG, "initPlayer, hardwareDecode=" + mHardwareDecode);
+        LOG.i(TAG, "initPlayer, hardwareDecode=" + mHardwareDecode);
         mMediaPlayer = com.aliyun.player.AliPlayerFactory.createAliPlayer(mAppContext);
         AliPlayerGlobalSettings.setUseHttp2(true);
         setOptions();
@@ -105,7 +105,7 @@ public class AliPlayer extends Player
     @Override
     public void setDataSource(String path, Map<String, String> headers) {
         if (path == null) return;
-        Log.i(TAG, "setDataSource: " + path);
+        LOG.i(TAG, "setDataSource: " + path);
         if (headers != null) {
             mHeaders.clear();
             mHeaders.putAll(headers);
@@ -123,7 +123,7 @@ public class AliPlayer extends Player
 
     @Override
     public void prepareAsync() {
-        Log.i(TAG, "prepareAsync");
+        LOG.i(TAG, "prepareAsync");
         try {
             if (mMediaPlayer == null) throw new IllegalStateException("player not initialized");
             if (!mHeaders.isEmpty() && mMediaPlayer.getConfig() != null) {
@@ -144,7 +144,7 @@ public class AliPlayer extends Player
             mMediaPlayer.prepare();
             mIsWaitingSeek = false;
         } catch (IllegalStateException e) {
-            Log.e(TAG, "prepareAsync failed", e);
+            LOG.e(TAG, "prepareAsync failed\n" + android.util.Log.getStackTraceString(e));
             if (mEventListener != null) mEventListener.onError(-1, Util.getRootCauseMessage(e));
         }
     }
@@ -155,7 +155,7 @@ public class AliPlayer extends Player
         try {
             mMediaPlayer.start();
         } catch (IllegalStateException e) {
-            Log.e(TAG, "start failed", e);
+            LOG.e(TAG, "start failed\n" + android.util.Log.getStackTraceString(e));
             if (mEventListener != null) mEventListener.onError(-1, Util.getRootCauseMessage(e));
         }
     }
@@ -166,7 +166,7 @@ public class AliPlayer extends Player
         try {
             mMediaPlayer.pause();
         } catch (IllegalStateException e) {
-            Log.e(TAG, "pause failed", e);
+            LOG.e(TAG, "pause failed\n" + android.util.Log.getStackTraceString(e));
             if (mEventListener != null) mEventListener.onError(-1, Util.getRootCauseMessage(e));
         }
     }
@@ -214,7 +214,7 @@ public class AliPlayer extends Player
             mIsWaitingSeek = true;
             mMediaPlayer.seekTo(time);
         } catch (IllegalStateException e) {
-            Log.e(TAG, "seekTo failed", e);
+            LOG.e(TAG, "seekTo failed\n" + android.util.Log.getStackTraceString(e));
             if (mEventListener != null) mEventListener.onError(-1, Util.getRootCauseMessage(e));
         }
     }
@@ -308,7 +308,7 @@ public class AliPlayer extends Player
     @Override
     public void setTrack(@Nullable TrackInfoBean track) {
         if (track == null || mMediaPlayer == null) return;
-        Log.e(TAG, "setTrack: id=" + track.trackId + ", type=" + track.type + ", name=" + track.name);
+        LOG.e(TAG, "setTrack: id=" + track.trackId + ", type=" + track.type + ", name=" + track.name);
         try {
             if (track.type == 2) {
                 requestSubtitle(track.trackId);
@@ -316,7 +316,7 @@ public class AliPlayer extends Player
                 mMediaPlayer.selectTrack(track.trackId);
             }
         } catch (Exception e) {
-            Log.e(TAG, "setTrack failed", e);
+            LOG.e(TAG, "setTrack failed\n" + android.util.Log.getStackTraceString(e));
             if (mEventListener != null) mEventListener.onError(-1, Util.getRootCauseMessage(e));
         }
     }
@@ -351,11 +351,11 @@ public class AliPlayer extends Player
             }
         }
         if (otherId >= 0) {
-            Log.e(TAG, "forceSelectSubtitle: " + targetId + " is current, switch to " + otherId + " then back");
+            LOG.e(TAG, "forceSelectSubtitle: " + targetId + " is current, switch to " + otherId + " then back");
             mMediaPlayer.selectTrack(otherId);
             mMediaPlayer.selectTrack(targetId);
         } else {
-            Log.e(TAG, "forceSelectSubtitle: no other subtitle track, select " + targetId);
+            LOG.e(TAG, "forceSelectSubtitle: no other subtitle track, select " + targetId);
             mMediaPlayer.selectTrack(targetId);
         }
     }
@@ -372,7 +372,7 @@ public class AliPlayer extends Player
             resolveSubtitleUrls();
             return;
         }
-        Log.e(TAG, "requestSubtitle: fallback to selectTrack " + nativeIdx);
+        LOG.e(TAG, "requestSubtitle: fallback to selectTrack " + nativeIdx);
         forceSelectSubtitle(nativeIdx);
     }
 
@@ -419,19 +419,19 @@ public class AliPlayer extends Player
                                 try {
                                     resolved = String.valueOf(new URI(resolved).resolve(segs.get(0)));
                                 } catch (Exception ignored) {}
-                                Log.e(TAG, "resolveSubtitleUrls: use segment " + resolved);
+                                LOG.e(TAG, "resolveSubtitleUrls: use segment " + resolved);
                             } else if (segs.size() > 1) {
-                                Log.e(TAG, "resolveSubtitleUrls: " + segs.size() + " segments, keep m3u8");
+                                LOG.e(TAG, "resolveSubtitleUrls: " + segs.size() + " segments, keep m3u8");
                             }
                         } catch (Exception e) {
-                            Log.e(TAG, "resolveSubtitleUrls: fetch subtitle playlist failed", e);
+                            LOG.e(TAG, "resolveSubtitleUrls: fetch subtitle playlist failed\n" + android.util.Log.getStackTraceString(e));
                         }
                     }
                     mExtSubtitleUrls.put(subs.get(i).getIndex(), resolved);
                 }
-                Log.e(TAG, "resolveSubtitleUrls: " + mExtSubtitleUrls);
+                LOG.e(TAG, "resolveSubtitleUrls: " + mExtSubtitleUrls);
             } catch (Exception e) {
-                Log.e(TAG, "resolveSubtitleUrls failed", e);
+                LOG.e(TAG, "resolveSubtitleUrls failed\n" + android.util.Log.getStackTraceString(e));
             } finally {
                 mResolvingSubtitleUrls = false;
                 mSubtitleUrlsResolved = true;
@@ -496,11 +496,11 @@ public class AliPlayer extends Player
             mActiveExtSubtitleIdx = -1;
         }
         if (addedIdx != null) {
-            Log.e(TAG, "applyExtSubtitle: enable ext " + addedIdx + " for native " + nativeIdx);
+            LOG.e(TAG, "applyExtSubtitle: enable ext " + addedIdx + " for native " + nativeIdx);
             mMediaPlayer.selectExtSubtitle(addedIdx, true);
             mActiveExtSubtitleIdx = addedIdx;
         } else {
-            Log.e(TAG, "applyExtSubtitle: addExtSubtitle " + url);
+            LOG.e(TAG, "applyExtSubtitle: addExtSubtitle " + url);
             mAddingExtNativeIdx = nativeIdx;
             mMediaPlayer.addExtSubtitle(url);
         }
@@ -580,14 +580,14 @@ public class AliPlayer extends Player
 
     @Override
     public void onError(ErrorInfo errorInfo) {
-        Log.e(TAG, "onError: code=" + errorInfo.getCode().getValue() + ", msg=" + errorInfo.getMsg());
+        LOG.e(TAG, "onError: code=" + errorInfo.getCode().getValue() + ", msg=" + errorInfo.getMsg());
         stop();
         if (mEventListener != null) mEventListener.onError(errorInfo.getCode().getValue(), errorInfo.getMsg());
     }
 
     @Override
     public void onCompletion() {
-        Log.i(TAG, "onCompletion");
+        LOG.i(TAG, "onCompletion");
         stop();
         if (mEventListener != null) mEventListener.onCompletion();
     }
@@ -606,7 +606,7 @@ public class AliPlayer extends Player
 
     @Override
     public void onPrepared() {
-        Log.i(TAG, "onPrepared");
+        LOG.i(TAG, "onPrepared");
         start();
         mMediaInfo = mMediaPlayer.getMediaInfo();
         if (mEventListener != null) {
@@ -651,13 +651,13 @@ public class AliPlayer extends Player
 
     @Override
     public void onSubtitleExtAdded(int trackIndex, String url) {
-        Log.e(TAG, "onSubtitleExtAdded: index=" + trackIndex + ", url=" + url);
+        LOG.e(TAG, "onSubtitleExtAdded: index=" + trackIndex + ", url=" + url);
         if (trackIndex < 0) {
             // addExtSubtitle 失败（负 index 为错误码），移除映射让后续走 selectTrack 回退
             int nativeIdx = mAddingExtNativeIdx;
             mAddingExtNativeIdx = -1;
             if (nativeIdx >= 0) mExtSubtitleUrls.remove(nativeIdx);
-            Log.e(TAG, "onSubtitleExtAdded: add failed for native " + nativeIdx);
+            LOG.e(TAG, "onSubtitleExtAdded: add failed for native " + nativeIdx);
             return;
         }
         if (mMediaPlayer == null) return;
@@ -671,7 +671,7 @@ public class AliPlayer extends Player
 
     @Override
     public void onSubtitleShow(int trackIndex, long id, String text) {
-        Log.e(TAG, "onSubtitleShow: " + text);
+        LOG.e(TAG, "onSubtitleShow: " + text);
         if (mTimedTextListener == null) return;
         if (text != null && !text.isEmpty()) {
             mTimedTextListener.onTimedText(text);
@@ -687,6 +687,6 @@ public class AliPlayer extends Player
 
     @Override
     public void onSubtitleHeader(int trackIndex, String header) {
-        Log.e(TAG, "onSubtitleHeader: index=" + trackIndex);
+        LOG.e(TAG, "onSubtitleHeader: index=" + trackIndex);
     }
 }

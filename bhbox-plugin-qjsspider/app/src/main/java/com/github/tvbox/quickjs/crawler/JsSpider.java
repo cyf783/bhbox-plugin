@@ -2,7 +2,7 @@ package com.github.tvbox.quickjs.crawler;
 
 import android.content.Context;
 import android.util.Base64;
-import android.util.Log;
+import com.github.catvod.utils.LOG;
 
 import com.github.catvod.utils.Json;
 import com.github.catvod.utils.UriUtil;
@@ -257,17 +257,17 @@ public class JsSpider extends com.github.catvod.crawler.Spider {
         String content = Module.get().fetch(source);
         if (content == null || content.isEmpty())
             throw new Exception("[drpy3] 站源拉取失败: " + source);
-        Log.e("Drpy3", "shim 求值, source=" + source + " len=" + content.length());
+        LOG.e("Drpy3", "shim 求值, source=" + source + " len=" + content.length());
         ctx.evaluateModule(JsLibAsset.read("js/lib/drpy3-shim.js"), "assets://js/lib/drpy3-shim.js");
-        Log.e("Drpy3", "adapter 求值");
+        LOG.e("Drpy3", "adapter 求值");
         ctx.evaluateModule(JsLibAsset.read("js/lib/drpy3-adapter.js"), "assets://js/lib/drpy3-adapter.js");
-        Log.e("Drpy3", "bootstrap 源码");
+        LOG.e("Drpy3", "bootstrap 源码");
         Drpy3Host.setSource(source);
         Async.run((JSObject) ctx.getGlobalObject(), "__drpy3bootstrap", content, key, source).get();
         jsObject = (JSObject) ctx.getProperty(ctx.getGlobalObject(), "__JS_SPIDER__");
         if (jsObject == null)
             throw new Exception("[drpy3] __JS_SPIDER__ 未挂载(bootstrap 已过): " + source);
-        Log.e("Drpy3", "装载完成");
+        LOG.e("Drpy3", "装载完成");
     }
 
     private JSObject cfg(String ext) {
