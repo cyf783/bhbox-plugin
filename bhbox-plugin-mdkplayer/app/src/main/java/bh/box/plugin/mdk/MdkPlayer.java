@@ -65,6 +65,7 @@ public class MdkPlayer extends Player {
     private final Handler mHandler;
     private final Context mAppContext;
     private long mNativePtr;
+    private Surface mSurface; // 已绑定 surface（重复绑定防护）
     private String mUrl;
     private String mHeaders;
     private boolean mHardware = true;
@@ -222,6 +223,7 @@ public class MdkPlayer extends Player {
         }
         mUrl = null;
         mHeaders = null;
+        mSurface = null;
         mBufferedPercent = 0;
         mSpeed = 1.0f;
         mSelAudio = 0;
@@ -256,6 +258,14 @@ public class MdkPlayer extends Player {
 
     @Override
     public void setSurface(Surface surface) {
+        // 同一 Surface 重复绑定跳过重绑（SurfaceView/TextureView 的 surfaceChanged 在布局/
+        // PiP 动画中连发，JNI 每次产生新 ANativeWindow 包装指针会让 mdk 误判换源而全量重建 GL），
+        // 但尺寸变化仍需下发——走 mdk resizeSurface 轻量路径，只更新尺寸不重建
+        if (surface == mSurface) {
+            if (mNativePtr != 0 && surface != null) nativeResizeSurface(mNativePtr);
+            return;
+        }
+        mSurface = surface;
         if (mNativePtr != 0) nativeSetSurface(mNativePtr, surface, -1, -1);
     }
 
@@ -413,6 +423,9 @@ public class MdkPlayer extends Player {
     private native int nativeState(long ptr);
 
     private native void nativeSetSurface(long ptr, Surface surface, int w, int h);
+
+    /** 同一 surface 的尺寸变化：查 ANativeWindow 当前尺寸后走 mdk resizeSurface 轻量路径 */
+    private native void nativeResizeSurface(long ptr);
 
     private native long nativeGetDuration(long ptr);
 

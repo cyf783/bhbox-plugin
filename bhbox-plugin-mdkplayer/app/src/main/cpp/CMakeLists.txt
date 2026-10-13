@@ -19,4 +19,4 @@ add_library(mdk-jni SHARED
         MDKPlayerJNI.cpp)
 
 target_include_directories(mdk-jni PRIVATE ${MDK_INCLUDE})
-target_link_libraries(mdk-jni PRIVATE mdk -llog)
+target_link_libraries(mdk-jni PRIVATE mdk -llog -landroid)

@@ -10,6 +10,8 @@
 #include "jmi/jmi.h"
 #include <jni.h>
 #include <android/log.h>
+#include <android/native_window.h>
+#include <android/native_window_jni.h>
 #include <mdk/Player.h>
 #include <mdk/MediaInfo.h>
 #include <string>
@@ -216,6 +218,25 @@ MDK_JNI(void, MdkPlayer_nativeSetSurface, jobject s, int w, int h)
     r->width = w;
     r->height = h;
     ApplySurface(r);
+}
+
+// 同一 surface 的尺寸变化：fromSurface 仅查询当前 buffer 尺寸后立即 release（指针不传给
+// mdk，避免新包装指针触发 NativeHandle 变化），再走 resizeSurface 轻量路径只更新尺寸
+MDK_JNI(void, MdkPlayer_nativeResizeSurface)
+{
+    if (!obj_ptr)
+        return;
+    auto r = reinterpret_cast<PlayerRef*>(obj_ptr);
+    if (!r->surface)
+        return;
+    ANativeWindow* win = ANativeWindow_fromSurface(env, r->surface);
+    if (!win)
+        return;
+    int w = ANativeWindow_getWidth(win);
+    int h = ANativeWindow_getHeight(win);
+    ANativeWindow_release(win);
+    if (w > 0 && h > 0)
+        r->player->resizeSurface(w, h);
 }
 
 MDK_JNI(jlong, MdkPlayer_nativeGetDuration)
