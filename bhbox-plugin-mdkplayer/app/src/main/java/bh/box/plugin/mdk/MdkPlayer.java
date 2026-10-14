@@ -165,6 +165,10 @@ public class MdkPlayer extends Player {
         // 关闭内核画面渲染仅外传文本，避免与宿主字幕浮层双显（mdk 0.39 libass 渲染 mov_text
         // 无输出，真机已验证，故仅保留宿主渲染一条路径）
         nativeSetProperty(mNativePtr, "subtitle", "0");
+        // 起播缓冲（bufferRange，格式"minMs+maxMs"）：默认 minMs=1000 攒 1 秒数据即开播，
+        // 换集后队列常只有一个分片，网络供给稍慢就耗尽进 Buffering（前 2~3 秒播一下停一下）；
+        // 提到 2s 起播门限 + 10s 预读上限（mdk 文档：maxMs 大值推荐且不影响延迟）
+        nativeSetProperty(mNativePtr, "buffer", "2000+10000");
         nativeSetDecoders(mNativePtr, mHardware ? DECODERS_HW : DECODERS_SW);
     }
 
