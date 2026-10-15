@@ -16,6 +16,8 @@ import com.github.catvod.plugin.player.spi.Player;
 import com.github.catvod.utils.Util;
 
 import java.util.Map;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /**
  * MDK 播放器实现（JNI 直驱，无官方 Java 层）。
@@ -93,6 +95,8 @@ public class MdkPlayer extends Player {
     private int mSelAudio;
     private int mSelVideo;
     private int mSelSubtitle;
+    // seek 串行后台线程（见 seekTo 注释）
+    private ExecutorService mSeekExecutor;
 
     public MdkPlayer(Context context, String decoder) {
         mAppContext = context;
@@ -242,7 +246,16 @@ public class MdkPlayer extends Player {
 
     @Override
     public void seekTo(long time) {
-        if (mNativePtr != 0) nativeSeek(mNativePtr, time);
+        // nativeSeek 同步等 mdk FrameReader 内部锁，读线程持锁等网络 IO 时主线程死等会
+        // ANR（真机复现：慢源 Prepared 续播 seek 卡死主线程）；投到串行后台线程执行
+        if (mNativePtr == 0 || mReleased) return;
+        final long ptr = mNativePtr;
+        if (mSeekExecutor == null || mSeekExecutor.isShutdown()) {
+            mSeekExecutor = Executors.newSingleThreadExecutor();
+        }
+        mSeekExecutor.execute(() -> {
+            if (!mReleased) nativeSeek(ptr, time);
+        });
     }
 
     @Override
@@ -398,6 +411,7 @@ public class MdkPlayer extends Player {
         mPolling = false;
         mEventListener = null; // 先摘 listener 防 native 回调竞态
         mHandler.removeCallbacksAndMessages(null);
+        if (mSeekExecutor != null) mSeekExecutor.shutdownNow(); // 掐掉在途 seek
         if (mNativePtr != 0) {
             nativeDestroy(mNativePtr);
             mNativePtr = 0;
