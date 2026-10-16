@@ -1,0 +1,11 @@
+{
+  "name": "qs",
+  "version": "6.16.1",
+  "main": "./qs.cjs",
+  "exports": {
+    ".": {
+      "import": "./qs.mjs",
+      "require": "./qs.cjs"
+    }
+  }
+}

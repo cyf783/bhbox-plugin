@@ -1,0 +1,14 @@
+{
+  "id": "bh.box.plugin.drpysspider",
+  "name": "drpyS 插件",
+  "description": "支持 drpyS (drpy-node) 转T3源。站点key必须以[ds_]开头",
+  "type": "spider",
+  "spider": "ds",
+  "mainClass": "bh.box.plugin.drpysspider.DrpysSpiderPlugin",
+  "downloadUrl": "",
+  "version": 100,
+  "versionName": "1.0.0",
+  "minSdk": 23,
+  "minAppVersion": 383,
+  "depends": ["bh.box.plugin.node"]
+}

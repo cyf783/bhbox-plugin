@@ -1,0 +1,11 @@
+{
+  "name": "hls-parser",
+  "version": "0.13.6",
+  "main": "./hls-parser.cjs",
+  "exports": {
+    ".": {
+      "import": "./hls-parser.mjs",
+      "require": "./hls-parser.cjs"
+    }
+  }
+}

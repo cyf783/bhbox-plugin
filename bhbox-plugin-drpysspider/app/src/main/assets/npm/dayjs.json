@@ -1,0 +1,11 @@
+{
+  "name": "dayjs",
+  "version": "1.11.23",
+  "main": "./dayjs.cjs",
+  "exports": {
+    ".": {
+      "import": "./dayjs.mjs",
+      "require": "./dayjs.cjs"
+    }
+  }
+}

@@ -1,0 +1,17 @@
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
+const mod = require('./ws.cjs');
+export const CONNECTING = mod["CONNECTING"];
+export const OPEN = mod["OPEN"];
+export const CLOSING = mod["CLOSING"];
+export const CLOSED = mod["CLOSED"];
+export const createWebSocketStream = mod["createWebSocketStream"];
+export const extension = mod["extension"];
+export const PerMessageDeflate = mod["PerMessageDeflate"];
+export const Receiver = mod["Receiver"];
+export const Sender = mod["Sender"];
+export const Server = mod["Server"];
+export const subprotocol = mod["subprotocol"];
+export const WebSocket = mod["WebSocket"];
+export const WebSocketServer = mod["WebSocketServer"];
+export default mod;

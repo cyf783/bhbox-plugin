@@ -1,0 +1,11 @@
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
+const mod = require('./dayjs.cjs');
+export const extend = mod["extend"];
+export const locale = mod["locale"];
+export const isDayjs = mod["isDayjs"];
+export const unix = mod["unix"];
+export const en = mod["en"];
+export const Ls = mod["Ls"];
+export const p = mod["p"];
+export default mod;

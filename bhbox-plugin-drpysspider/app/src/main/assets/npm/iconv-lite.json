@@ -1,0 +1,11 @@
+{
+  "name": "iconv-lite",
+  "version": "0.6.3",
+  "main": "./iconv-lite.cjs",
+  "exports": {
+    ".": {
+      "import": "./iconv-lite.mjs",
+      "require": "./iconv-lite.cjs"
+    }
+  }
+}
