@@ -1,6 +1,6 @@
 {
   "id": "bh.box.plugin.catspider",
-  "name": "CatSpider 插件",
+  "name": "Cat Spider 插件",
   "description": "支持 CatVodOpen nodejs (T3) 源。站点key必须以[cat_]开头",
   "type": "spider",
   "spider": "cat",
