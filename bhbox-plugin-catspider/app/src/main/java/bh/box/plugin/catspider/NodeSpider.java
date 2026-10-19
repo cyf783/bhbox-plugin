@@ -361,6 +361,36 @@ public class NodeSpider extends Spider {
         return httpPost("search", body.toString());
     }
 
+    // ==================== 动作卡桥（壳 Spider.action() → 本机 server /action） ====================
+
+    /**
+     * 单参动作：宿主把 vod_id 原文（动作卡 JSON 串或裸动作名）整体转发进来。
+     * 与在线宿主行为完全对齐：原文作为裸 body POST /spider/<route>/action，
+     * server 端动作适配层负责识别卡片 JSON/裸串并完成首击回显（{action:卡片} 让壳渲染弹窗）或透传源。
+     * 基类空实现直接返回空串（壳判「操作失败」且 HTTP 都不发）——本重写即补上该桥。
+     */
+    @Override
+    public String action(String action) {
+        if (TextUtils.isEmpty(action)) return "";
+        return httpPost("action", action);
+    }
+
+    /**
+     * 双参动作：弹窗提交后的二次调用，走 catvod 标准协议 {"action":..., "value":...} 直透
+     * （与在线通道同款，server 适配层提交流直接命中，value 折叠归一化后透传源入库）。
+     * value 为空时退化为单参语义（首击回显让壳弹窗）。
+     */
+    @Override
+    public String action(String action, String value) {
+        if (TextUtils.isEmpty(value)) {
+            return TextUtils.isEmpty(action) ? "" : httpPost("action", action);
+        }
+        JsonObject body = new JsonObject();
+        body.addProperty("action", action);
+        body.addProperty("value", value);
+        return httpPost("action", body.toString());
+    }
+
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) {
         JsonObject body = new JsonObject();
