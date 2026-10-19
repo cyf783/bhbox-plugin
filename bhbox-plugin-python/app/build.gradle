@@ -1,0 +1,49 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'bh.box.plugin.python'
+    compileSdk rootProject.ext.compileSdk
+
+    defaultConfig {
+        applicationId "bh.box.plugin.python"
+        minSdk rootProject.ext.minSdk
+        targetSdk rootProject.ext.targetSdk
+        versionCode 100
+        versionName "1.0.0"
+        ndk { abiFilters "arm64-v8a" }
+    }
+
+    buildTypes {
+        debug {
+            minifyEnabled false
+            shrinkResources false
+            debuggable true
+        }
+        release {
+            minifyEnabled true
+            shrinkResources true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+
+    // catvod 传递依赖 kotlin-stdlib 2.2.x 元数据与 AGP 8.5 内嵌 Kotlin 2.0 冲突，
+    // lintVitalRelease 会编译失败（mdkplayer 同款已知问题），关闭 release vital lint
+    lint {
+        checkReleaseBuilds false
+    }
+
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
+        }
+    }
+}
+
+dependencies {
+    compileOnly 'com.github.cyf783:bhbox-catvod:1.0.0'
+}
+
+// 零依赖自写混淆字典任务（共享脚本，取代 cleverpumpkin proguard-dictionaries-generator 插件）
+apply from: "$rootDir/gradle/proguard-dictionary.gradle"

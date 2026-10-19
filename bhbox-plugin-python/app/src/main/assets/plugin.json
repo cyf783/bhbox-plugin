@@ -1,0 +1,12 @@
+{
+  "id": "bh.box.plugin.python",
+  "name": "Python 运行时",
+  "description": "Python 3.12 可执行运行时（musl 独立进程，含 pip）。",
+  "type": "runtime",
+  "mainClass": "bh.box.plugin.python.PythonRuntimePlugin",
+  "downloadUrl": "https://h-box-release.netlify.app/release/plugins/python.apk",
+  "version": 100,
+  "versionName": "1.0.0",
+  "minSdk": 23,
+  "minAppVersion": 383
+}
