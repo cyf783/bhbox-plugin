@@ -160,6 +160,9 @@ public class PythonRuntimePlugin implements IRuntimePlugin {
         String router = "#!/system/bin/sh\nexec \"" + loader.getAbsolutePath() + "\" \""
                 + python.getAbsolutePath() + "\" \"$@\"\n";
         String entry = "#!/system/bin/sh\n"
+                // 宿主进程内 Chaquopy（pyspider）会 setenv PYTHONPATH 指向旧版 pyc 包（.imy），
+                // 子进程继承后 CPython 从中读 encodings 必撞 pyc magic number 不匹配（init_fs_encoding Fatal），必须清掉
+                + "unset PYTHONPATH\n"
                 + "export PYTHONHOME=\"" + root.getAbsolutePath() + "\"\n"
                 + "export LD_LIBRARY_PATH=\"" + new File(root, "lib").getAbsolutePath() + "\"\n"
                 + "exec \"" + loader.getAbsolutePath() + "\" \"" + python.getAbsolutePath() + "\" \"$@\"\n";
