@@ -34969,6 +34969,19 @@ var app = (0, import_fastify.default)({
   keepAliveTimeout: 65e3,
   bodyLimit: 2 * 1024 * 1024
 });
+// 客户端（TVBox/okhttp）以 application/x-www-form-urlencoded 发送 extend=<base64>&filter=true 等表单，
+// fastify 默认只解析 application/json，不解析该类型会导致 request.body 为空、extend 拿不到、源端没数据。
+// 注册解析器把表单解码成对象，源端从 request.body 正常取参。
+app.addContentTypeParser("application/x-www-form-urlencoded", { parseAs: "string" }, (req, body, done) => {
+  try {
+    const params = new URLSearchParams(body || "");
+    const obj = {};
+    for (const [k, v] of params) obj[k] = v;
+    done(null, obj);
+  } catch (e) {
+    done(e, {});
+  }
+});
 var PREFIX = "/spider";
 var sources = /* @__PURE__ */ new Map();
 function collectRoutes(mod) {
@@ -35048,6 +35061,45 @@ app.all(`${PREFIX}/:name/*`, async (request, reply) => {
     reply.code(404);
     return { error: `route not found: ${method} ${rest}` };
   }
+  // ==== 动作卡协议适配(壳→源, 本地 /spider 与 在线 /api 共用同一份逻辑) ====
+  // 在线壳走标准协议(body 带 action 键)直接命中; 本地 dex 壳把 vod_id 原文整体 POST
+  // (裸串或卡片 JSON, 无 action 键)→ 这里补齐 action 提取 + 首击回显 + 提交折叠。
+  // 首击流: 卡片 JSON 带 input[]/input 型且无 value → 回显 {action:卡片JSON} 让壳渲染弹窗
+  // 提交流: input[] 有非空值或已带 value → 折叠/归一化 value 透传源内入库。失败不影响原分发。
+  try {
+    const q = request.query || {};
+    let ab = request.body;
+    if (typeof ab === 'string') {
+      try { ab = JSON.parse(ab); request.body = ab; } catch (e) {
+        ab = null;
+        if (rest === '/action' && String(request.body || '').trim() !== '') request.body = { action: request.body };
+      }
+    }
+    if (rest === '/action' && ab && typeof ab === 'object' && !Array.isArray(ab)) {
+      if (ab.action === undefined && ab.do === undefined) {
+        let cand = ab.actionId !== undefined ? ab.actionId : (q.actionId !== undefined ? q.actionId : (q.do !== undefined ? q.do : (q.action !== undefined ? q.action : undefined)));
+        if (cand === undefined) {
+          const ks = Object.keys(ab);
+          if (ks.length === 1 && ab[ks[0]] === '') cand = ks[0];
+        }
+        if (cand !== undefined) ab.action = String(cand);
+      }
+      if (ab.value !== undefined && ab.value !== null && typeof ab.value === 'object') ab.value = JSON.stringify(ab.value);
+      if (ab.action !== undefined && ab.value === undefined && (Array.isArray(ab.input) || ab.type === 'multiInput' || ab.type === 'input')) {
+        if (Array.isArray(ab.input)) {
+          const vals = {};
+          let filled = false;
+          for (const it of ab.input) { if (it && it.id !== undefined) { const v = (it.value !== undefined && it.value !== null) ? it.value : ''; vals[it.id] = v; if (v !== '') filled = true; } }
+          if (filled) ab.value = JSON.stringify(vals);
+        }
+        if (ab.value === undefined) {
+          console.log('[action-echo] ' + name + rest + ' first-press echo');
+          return { action: ab };
+        }
+      }
+    }
+    console.log('[action] ' + name + rest + ' q=' + JSON.stringify(q) + ' b=' + JSON.stringify(request.body));
+  } catch (e) { /* adapter failure never breaks dispatch */ }
   const scoped = Object.create(request);
   Object.defineProperty(scoped, "server", {
     value: Object.create(request.server, { prefix: { value: `${PREFIX}/${encodeURIComponent(name)}`, enumerable: true } })
