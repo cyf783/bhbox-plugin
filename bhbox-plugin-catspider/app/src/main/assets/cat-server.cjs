@@ -34963,7 +34963,27 @@ var import_fastify = __toESM(require_fastify(), 1);
 var import_fs = require("fs");
 var import_url = require("url");
 var import_path = require("path");
-var sourcesDir = process.argv[2];
+function loadEnvFile() {
+  let txt;
+  try {
+    txt = (0, import_fs.readFileSync)((0, import_path.join)(process.cwd(), ".env"), "utf-8");
+  } catch {
+    return;
+  }
+  for (const line of txt.split("\n")) {
+    const m = line.match(/^\s*([\w.-]+)\s*=\s*(.*)\s*$/);
+    if (!m)
+      continue;
+    const k = m[1];
+    let v = m[2];
+    if (v.startsWith('"') && v.endsWith('"') || v.startsWith("'") && v.endsWith("'"))
+      v = v.slice(1, -1);
+    if (process.env[k] === void 0)
+      process.env[k] = v;
+  }
+}
+loadEnvFile();
+var sourcesDir = process.argv[2] || process.env.SOURCES_DIR || (0, import_path.join)(process.cwd(), "sources");
 var app = (0, import_fastify.default)({
   logger: false,
   keepAliveTimeout: 65e3,
@@ -34982,6 +35002,7 @@ app.addContentTypeParser("application/x-www-form-urlencoded", { parseAs: "string
 });
 var PREFIX = "/spider";
 var sources = /* @__PURE__ */ new Map();
+var lastInitExt = /* @__PURE__ */ new Map();
 function collectRoutes(mod) {
   const routes = /* @__PURE__ */ new Map();
   const reg = (method) => (path, handler) => routes.set(`${method} ${path}`, handler);
@@ -35023,7 +35044,8 @@ async function loadSource(file, bust = false) {
     throw new Error("invalid source (meta.key + api required)");
   }
   const routes = await collectRoutes(mod);
-  sources.set(route, { meta, routes });
+  const cfg = mod?.default?.config ?? mod?.default?.ext ?? null;
+  sources.set(route, { meta, routes, cfg });
   console.log(`register: ${PREFIX}/${route} (${meta.name || meta.key})`);
   return { ok: true, route };
 }
@@ -35034,17 +35056,436 @@ async function loadAll() {
   } catch (e) {
     console.error("readdir failed: " + e.message);
   }
+  const flatJs = [];
   for (const entry of entries) {
-    if (!entry.isDirectory())
-      continue;
-    const file = `${entry.name}/${entry.name}.js`;
+    if (entry.isDirectory()) {
+      const f = `${entry.name}/${entry.name}.js`;
+      try {
+        await loadSource(f);
+      } catch (e2) {
+        console.error(`load failed: ${f}: ${e2.message}`);
+      }
+    } else if (entry.isFile() && entry.name.endsWith(".js"))
+      flatJs.push(entry.name);
+  }
+  for (const f of flatJs.sort()) {
     try {
-      await loadSource(file);
+      await loadSource(f);
     } catch (e2) {
-      console.error(`load failed: ${file}: ${e2.message}`);
+      console.error(`load failed: ${f}: ${e2.message}`);
     }
   }
 }
+var sourceCache = /* @__PURE__ */ new Map();
+var loadLocks = /* @__PURE__ */ new Map();
+async function resolveSource(name) {
+  const file = name.endsWith(".js") ? name : name + ".js";
+  if (file.includes("/") || file.includes("\\") || file.includes(".."))
+    return null;
+  const fullPath = (0, import_path.join)(sourcesDir, file);
+  let mtime = 0;
+  try {
+    mtime = (0, import_fs.statSync)(fullPath).mtimeMs;
+  } catch (e) {
+  }
+  const cached = sourceCache.get(name);
+  if (cached && cached.mtime === mtime)
+    return cached.src;
+  if (loadLocks.has(name))
+    return loadLocks.get(name);
+  const p = (async () => {
+    try {
+      await loadSource(file, true);
+      const s = sources.get(name.endsWith(".js") ? name.slice(0, -3) : name);
+      sourceCache.set(name, { mtime, src: s });
+      return s;
+    } catch (e) {
+      console.error(`resolve ${name} failed: ${e.message}`);
+      const c = sourceCache.get(name);
+      return c ? c.src : null;
+    } finally {
+      loadLocks.delete(name);
+    }
+  })();
+  loadLocks.set(name, p);
+  return p;
+}
+function standardizeSpiderArgs(query, body) {
+  const q = query || {};
+  const b = body || {};
+  const merged = { ...q, ...b };
+  const std = { ...merged };
+  let tid = merged.tid != null ? merged.tid : merged.t;
+  if (tid === "")
+    tid = void 0;
+  const pg = merged.pg != null ? merged.pg : merged.page;
+  if (tid !== void 0)
+    std.tid = tid;
+  if (pg !== void 0)
+    std.pg = pg;
+  if (merged.ids !== void 0)
+    std.ids = merged.ids;
+  const idv = merged.id != null ? merged.id : merged.ids;
+  if (idv !== void 0)
+    std.id = idv;
+  const rawConf = merged.extend !== void 0 ? merged.extend : merged.ext;
+  if (rawConf !== void 0) {
+    std.extend = rawConf;
+    if (std.ext === void 0 || typeof std.ext !== "object") {
+      try {
+        const eObj = JSON.parse(Buffer.from(String(rawConf), "base64").toString("utf-8"));
+        if (eObj && typeof eObj === "object") {
+          std.ext = eObj;
+          std.extend = Buffer.from(JSON.stringify(eObj)).toString("base64");
+        }
+      } catch (e2) {
+      }
+    }
+  }
+  if (merged.filter !== void 0)
+    std.filter = merged.filter;
+  if (merged.filters !== void 0)
+    std.filters = merged.filters;
+  if (merged.play !== void 0) {
+    std.play = merged.play;
+    std.url = merged.play;
+  }
+  if (merged.flag !== void 0)
+    std.flag = merged.flag;
+  if (merged.flags !== void 0)
+    std.flags = merged.flags;
+  if (merged.wd !== void 0)
+    std.wd = merged.wd;
+  if (merged.keyword !== void 0)
+    std.keyword = merged.keyword;
+  if (merged.quick !== void 0)
+    std.quick = merged.quick;
+  const dec = (s) => {
+    try {
+      return JSON.parse(Buffer.from(String(s), "base64").toString("utf-8"));
+    } catch (e) {
+      return null;
+    }
+  };
+  let filtObj = merged.f !== void 0 ? dec(merged.f) : null;
+  if (Array.isArray(filtObj))
+    filtObj = filtObj[0] || null;
+  if (filtObj !== null && typeof filtObj !== "object")
+    filtObj = null;
+  if (!filtObj && merged.ext !== void 0 && typeof merged.ext !== "object") {
+    const o = dec(merged.ext);
+    if (o && !Array.isArray(o))
+      filtObj = o;
+  }
+  if (!filtObj) {
+    const fe = {};
+    for (const k of ["cateId", "by", "year", "area", "letter", "class", "lang", "actor", "director", "tag", "type"])
+      if (merged[k] !== void 0)
+        fe[k] = merged[k];
+    filtObj = Object.keys(fe).length ? fe : null;
+  }
+  if (filtObj) {
+    std.filter = filtObj;
+    std.filters = filtObj;
+  }
+  return std;
+}
+function resolveSpiderAction(raw, std) {
+  let action = String(raw || "home").replace(/^\/+/, "");
+  if (std.wd !== void 0 || std.keyword !== void 0) {
+    action = "search";
+  } else if (std.play !== void 0) {
+    action = "play";
+  } else if (action === "detail") {
+    if (std.ids !== void 0) {
+      action = "detail";
+    } else if (std.tid !== void 0) {
+      action = "category";
+    } else {
+      action = "home";
+    }
+  } else if (action === "videolist" || action === "list") {
+    action = "category";
+  } else if (action === "play") {
+    action = "play";
+  }
+  return action;
+}
+async function spiderHandler(request, reply) {
+  const name = request.params.name;
+  const cfgPwd = process.env.CONFIG_PWD;
+  if (cfgPwd && String(request.query?.pwd || "") !== cfgPwd) {
+    reply.code(401);
+    return { error: "invalid pwd" };
+  }
+  const src = await resolveSource(name);
+  if (!src) {
+    reply.code(404);
+    return { error: `source not found: ${name}` };
+  }
+  const reqQuery = request.query ?? {};
+  const reqBody = request.body?.body ?? request.body ?? {};
+  const std = standardizeSpiderArgs(reqQuery, reqBody);
+  const rawAction = request.body?.ac || request.body?.action || reqQuery.ac || reqQuery.action || "home";
+  const action = resolveSpiderAction(rawAction, std);
+  const initSig = JSON.stringify(std.ext || {}) || "";
+  const initRoute = src.routes.get("POST /init") || src.routes.get("ANY /init");
+  const makeScoped = () => {
+    const s = Object.create(request);
+    s.body = std;
+    s.params = request.body?.params ?? {};
+    s.query = { ...reqQuery, ...std };
+    Object.defineProperty(s, "server", {
+      value: Object.create(request.server, { prefix: { value: `/api/${name}`, enumerable: true } })
+    });
+    return s;
+  };
+  if (initRoute) {
+    if (action === "init") {
+      const r = await initRoute(makeScoped(), reply);
+      lastInitExt.set(name, initSig);
+      return r;
+    }
+    if (lastInitExt.get(name) !== initSig) {
+      try {
+        await initRoute(makeScoped(), reply);
+      } catch (e) {
+        console.log(`[auto-init] ${name} failed: ${e.message}`);
+      }
+      lastInitExt.set(name, initSig);
+    }
+  }
+  const method = "POST";
+  const rest = "/" + action;
+  const handler = src.routes.get(`${method} ${rest}`) || src.routes.get(`ANY ${rest}`);
+  if (!handler) {
+    reply.code(404);
+    return { error: `route not found: ${method} ${rest}`, routes: [...src.routes.keys()] };
+  }
+  return handler(makeScoped(), reply);
+}
+app.all("/api/:name", (req, rep) => spiderHandler(req, rep));
+var _extCache = null;
+var _extFingerprint = "";
+function getExtConfig() {
+  let fp = "";
+  try {
+    fp = (0, import_fs.readdirSync)((0, import_path.join)(process.cwd(), "json")).sort().map((f) => {
+      try {
+        return f + ":" + (0, import_fs.statSync)((0, import_path.join)(process.cwd(), "json", f)).mtimeMs;
+      } catch (e) {
+        return f + ":0";
+      }
+    }).join("|");
+  } catch (e) {
+  }
+  if (_extCache && fp === _extFingerprint)
+    return _extCache;
+  let merged = {};
+  try {
+    for (const f of (0, import_fs.readdirSync)((0, import_path.join)(process.cwd(), "json")).sort()) {
+      if (!f.endsWith(".json"))
+        continue;
+      try {
+        Object.assign(merged, JSON.parse((0, import_fs.readFileSync)((0, import_path.join)(process.cwd(), "json", f), "utf-8")));
+      } catch (e) {
+      }
+    }
+  } catch (e) {
+  }
+  if (process.env.EXT_CONFIG) {
+    try {
+      Object.assign(merged, JSON.parse(process.env.EXT_CONFIG));
+    } catch (e) {
+    }
+  }
+  _extCache = merged;
+  _extFingerprint = fp;
+  return _extCache;
+}
+function confKeyOf(route) {
+  const cfg = getExtConfig();
+  if (cfg[route] != null)
+    return cfg[route];
+  const clean = route.replace(/\[[^\]]*\]/g, "").trim();
+  if (clean && clean !== route && cfg[clean] != null)
+    return cfg[clean];
+  return {};
+}
+function isInstanceDict(d) {
+  const vals = Object.values(d);
+  if (!vals.length)
+    return false;
+  return vals.every((v) => v && typeof v === "object" && !Array.isArray(v));
+}
+async function generateConfig(request) {
+  const cfgPwd = process.env.CONFIG_PWD || "";
+  const proto = request.headers["x-forwarded-proto"] || (request.server?.info?.protocol || "http");
+  const host = process.env.PUBLIC_HOST || request.headers["host"] || `localhost:${process.env.PORT || 3e3}`;
+  const base = `${proto}://${host}`;
+  let files = [];
+  try {
+    files = (0, import_fs.readdirSync)(sourcesDir).filter((f) => f.endsWith(".js")).sort();
+  } catch (e) {
+  }
+  const sites = [];
+  for (const file of files) {
+    const route = (0, import_path.basename)(file, ".js");
+    const src = await resolveSource(route);
+    if (!src)
+      continue;
+    const meta = src.meta || {};
+    const cleanRoute = route.replace(/\[[^\]]*\]/g, "").trim();
+    const sc = sources.get(route)?.cfg;
+    const extDict = sc && typeof sc === "object" && !Array.isArray(sc) ? sc : confKeyOf(route);
+    let instances;
+    if (extDict && typeof extDict === "object" && !Array.isArray(extDict) && isInstanceDict(extDict)) {
+      const instKeys = Object.keys(extDict).filter((k) => k !== "示例");
+      instances = instKeys.length ? instKeys.map((ik) => ({ name: ik, cfg: extDict[ik] })) : [{ name: meta.name || meta.key || route, cfg: null }];
+    } else if (extDict && typeof extDict === "object" && !Array.isArray(extDict)) {
+      instances = [{ name: meta.name || meta.key || route, cfg: extDict }];
+    } else {
+      instances = [{ name: meta.name || meta.key || route, cfg: null }];
+    }
+    for (const inst of instances) {
+      const cfgObj = inst.cfg;
+      const hasCfg = cfgObj && typeof cfgObj === "object" && !Array.isArray(cfgObj) && Object.keys(cfgObj).length > 0;
+      const _ext = hasCfg ? Buffer.from(JSON.stringify(cfgObj)).toString("base64") : "";
+      sites.push({
+        key: hasCfg ? `${cleanRoute}_${inst.name}` : meta.key || route,
+        name: inst.name,
+        type: 4,
+        api: `${base}/api/${encodeURIComponent(route)}` + (cfgPwd ? `?pwd=${cfgPwd}` : ""),
+        searchable: 1,
+        filterable: 1,
+        quickSearch: 0,
+        ext: _ext
+      });
+    }
+  }
+  return {
+    sites_count: sites.length,
+    spider: process.env.SPIDER_JAR || "",
+    homepage: "",
+    sniffer: {},
+    recommend: [],
+    rating: [],
+    doh: [],
+    ijk: [],
+    rules: [],
+    ads: [],
+    drives: [],
+    sites
+  };
+}
+app.get("/config/:id", async (request, reply) => {
+  const cfgPwd = process.env.CONFIG_PWD;
+  if (cfgPwd && String(request.query?.pwd || "") !== cfgPwd) {
+    reply.code(401);
+    return { error: "invalid pwd" };
+  }
+  return generateConfig(request);
+});
+app.get("/index", async (request, reply) => {
+  const cfgPwd = process.env.CONFIG_PWD;
+  if (cfgPwd && String(request.query?.pwd || "") !== cfgPwd) {
+    reply.code(401);
+    return { error: "invalid pwd" };
+  }
+  return generateConfig(request);
+});
+app.get("/check", async () => {
+  let all = [];
+  try {
+    all = (0, import_fs.readdirSync)(sourcesDir).filter((f) => f.endsWith(".js")).sort();
+  } catch (e) {
+  }
+  return { run: true, dir: sourcesDir, sources: all, loaded: [...sources.keys()] };
+});
+function checkApiAuth(request, reply) {
+  const token = process.env.API_TOKEN;
+  if (!token)
+    return true;
+  const auth = request.headers["authorization"] || "";
+  const m = auth.match(/^Bearer\s+(.+)$/i);
+  const provided = m ? m[1] : request.body?.token || request.query?.token;
+  if (provided !== token) {
+    reply.code(401).header("www-authenticate", "Bearer");
+    return false;
+  }
+  return true;
+}
+async function handleRegister(list, reply) {
+  if (!Array.isArray(list) || !list.length) {
+    reply.code(400);
+    return { ok: false, error: "empty sources" };
+  }
+  const results = [];
+  for (const item of list) {
+    const raw = String(item?.name || "");
+    const name = raw.replace(/[^a-zA-Z0-9_\-]/g, "");
+    const file = name.endsWith(".js") ? name : name + ".js";
+    if (!name || file.includes("/") || file.includes("\\") || file.includes("..")) {
+      results.push({ ok: false, name: raw, error: "invalid name" });
+      continue;
+    }
+    try {
+      let code = item?.code;
+      if (!code && item?.url) {
+        const res = await fetch(item.url);
+        if (!res.ok)
+          throw new Error("download failed: " + res.status);
+        code = await res.text();
+      }
+      if (!code || typeof code !== "string")
+        throw new Error("code or url required");
+      (0, import_fs.writeFileSync)((0, import_path.join)(sourcesDir, file), code);
+      const r = await loadSource(file, true);
+      results.push({ ok: true, ...r });
+    } catch (e) {
+      results.push({ ok: false, name: file, error: e.message });
+    }
+  }
+  return { ok: results.every((r) => r.ok), results };
+}
+app.post("/api", async (request, reply) => {
+  if (!checkApiAuth(request, reply))
+    return;
+  const b = request.body || {};
+  const rawAction = b.action || "home";
+  if (rawAction === "register" || rawAction === "batch") {
+    return handleRegister(b.sources, reply);
+  }
+  const key = String(b.key || "");
+  if (!key) {
+    reply.code(400);
+    return { ok: false, error: "missing key" };
+  }
+  const src = sources.get(key);
+  if (!src) {
+    reply.code(404);
+    return { ok: false, error: `source not found: ${key}`, sources: [...sources.keys()] };
+  }
+  const bQuery = b.params ?? {};
+  const bBody = b.body ?? b ?? {};
+  const std = standardizeSpiderArgs(bQuery, bBody);
+  const action = resolveSpiderAction(rawAction, std);
+  const method = String(b.method || "POST").toUpperCase();
+  const rest = "/" + action;
+  const handler = src.routes.get(`${method} ${rest}`) || src.routes.get(`ANY ${rest}`);
+  if (!handler) {
+    reply.code(404);
+    return { ok: false, error: `route not found: ${method} ${rest}`, routes: [...src.routes.keys()] };
+  }
+  const scoped = Object.create(request);
+  scoped.body = std;
+  scoped.params = b.params ?? {};
+  scoped.query = { ...std, ...b.params ?? {} };
+  Object.defineProperty(scoped, "server", {
+    value: Object.create(request.server, { prefix: { value: `${PREFIX}/${key}`, enumerable: true } })
+  });
+  return handler(scoped, reply);
+});
 app.all(`${PREFIX}/:name/*`, async (request, reply) => {
   const name = request.params.name;
   const rest = "/" + request.params["*"];
@@ -35085,7 +35526,7 @@ app.all(`${PREFIX}/:name/*`, async (request, reply) => {
       }
       if (ab.value !== void 0 && ab.value !== null && typeof ab.value === "object")
         ab.value = JSON.stringify(ab.value);
-      if (ab.action !== void 0 && ab.value === void 0 && (Array.isArray(ab.input) || ab.type === "multiInput" || ab.type === "input")) {
+      if (ab.action !== void 0 && ab.value === void 0 && (Array.isArray(ab.input) || ab.type === "multiInput" || ab.type === "input" || ab.type === "edit")) {
         if (Array.isArray(ab.input)) {
           const vals = {};
           let filled = false;
@@ -35115,15 +35556,21 @@ app.all(`${PREFIX}/:name/*`, async (request, reply) => {
   });
   return handler(scoped, reply);
 });
-app.get("/check", async () => ({ run: true, dir: sourcesDir, sources: [...sources.keys()] }));
 app.post("/load", async (request, reply) => {
   const file = String(request.body?.file || "");
-  if (!/^[0-9a-f]{32}\/[0-9a-f]{32}\.js$/.test(file)) {
+  const md5Layout = /^[0-9a-f]{32}\/[0-9a-f]{32}\.js$/.test(file);
+  const flat = !file.includes("/") && !file.includes("\\") && !file.includes("..") && file.endsWith(".js") && file.length > 3;
+  if (!md5Layout && !flat) {
     reply.code(400);
     return { ok: false, error: "invalid file name" };
   }
   try {
-    return await loadSource(file, request.body?.bust === true);
+    const r = await loadSource(file, request.body?.bust === true);
+    try {
+      _extCache = null;
+    } catch (e2) {
+    }
+    return r;
   } catch (e) {
     reply.code(500);
     return { ok: false, error: e.message };
