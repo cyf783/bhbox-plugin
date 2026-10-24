@@ -10,8 +10,8 @@ android {
         applicationId "bh.box.plugin.mpv"
         minSdk 23
         targetSdk rootProject.ext.targetSdk
-        versionCode 120
-        versionName "1.2.0"
+        versionCode 121
+        versionName "1.2.1"
         ndk { abiFilters "arm64-v8a" }
     }
 
@@ -37,7 +37,7 @@ android {
 }
 
 dependencies {
-    compileOnly 'com.github.cyf783:bhbox-catvod:1.0.0'
+    compileOnly 'com.github.cyf783:bhbox-catvod:1.0.2'
 }
 
 // 零依赖自写混淆字典任务（共享脚本，取代 cleverpumpkin proguard-dictionaries-generator 插件）

@@ -1,15 +1,16 @@
 package bh.box.plugin.mpv;
 
 import android.content.Context;
-import android.net.Uri;
 
 import com.github.catvod.plugin.bean.ApkParam;
 import com.github.catvod.plugin.bean.ApkPluginBean;
 import com.github.catvod.plugin.player.PlayerFactory;
 import com.github.catvod.plugin.player.spi.Player;
+import com.github.catvod.utils.ClanPath;
 import com.github.catvod.utils.Plugin;
 
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.util.Arrays;
@@ -63,7 +64,7 @@ public class MpvPlayerFactory implements PlayerFactory {
                         break;
                     case "mpv_conf":
                         if (val != null && !val.isEmpty()) {
-                            importMpvConf(context, Uri.parse(val));
+                            importMpvConf(context, val);
                         }
                         break;
                 }
@@ -86,8 +87,9 @@ public class MpvPlayerFactory implements PlayerFactory {
     @Override
     public void toggleDotPort(boolean enable) { /* mpv 暂不支持 dot-port */ }
 
-    private void importMpvConf(Context context, Uri uri) {
-        try (InputStream in = context.getContentResolver().openInputStream(uri)) {
+    /** path 为宿主统一交付的 clanPath（file://x）或手输绝对路径，ClanPath.toAbsFile 双形态兼容 */
+    private void importMpvConf(Context context, String path) {
+        try (InputStream in = new FileInputStream(ClanPath.toAbsFile(path))) {
             File confDir = new File(context.getFilesDir(), "mpv");
             if (!confDir.exists()) confDir.mkdirs();
             File confFile = new File(confDir, "mpv.conf");
