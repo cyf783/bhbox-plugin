@@ -1,0 +1,20 @@
+{
+  "id": "bh.box.plugin.legado",
+  "name": "Legado 书源插件",
+  "description": "阅读(legado)书源转 T4 小说服务。安装后在插件页启动，再把状态页里的订阅地址 http://127.0.0.1:9930/config 添加为线路配置",
+  "type": "service",
+  "mainClass": "bh.box.plugin.legado.LegadoPlugin",
+  "version": 100,
+  "versionName": "1.0.0",
+  "minSdk": 23,
+  "minAppVersion": 385,
+  "autoRun": true,
+  "downloadUrl": "",
+  "depends": ["bh.box.plugin.node"],
+  "params": [
+    { "id": "remoteUrls", "name": "网络书源地址", "type": "text", "lines": 4,
+      "hint": "http(s):// 开头的书源 JSON 订阅，每行一个" },
+    { "id": "localFile", "name": "本地书源文件", "type": "file",
+      "hint": "阅读APP导出的 JSON 文件绝对路径" }
+  ]
+}
