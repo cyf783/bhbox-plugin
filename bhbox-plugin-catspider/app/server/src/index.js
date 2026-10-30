@@ -541,7 +541,28 @@ main().catch((e) => {
     process.exit(1);
 });
 async function main() {
-    await loadAll();
+    // ==== ENV + pan/ 全局预载（index.js / source/ / pan/ / utils/ / config/ 平级）====
+    const appRoot = join(sourcesDir, '..');
+    // utils/*.js 自挂全局（env.js→ENV, cookieManager.js→COOKIE, cache.js→CacheStore/setItem/getItem/clearItem）
+    try {
+        for (const f of readdirSync(join(appRoot, 'utils')).filter((x) => x.endsWith('.js'))) {
+            try { await import(pathToFileURL(join(appRoot, 'utils', f)).href); } catch (e) { console.error(`utils load failed: ${f}: ${e.message}`); }
+        }
+        console.log('utils preloaded');
+    } catch (e) { console.error(`utils dir missing: ${e.message}`); }
+    // pan/*.js 导出全挂 globalThis（源内裸用 Baidu2/Quark 等）
+    const panDir = join(appRoot, 'pan');
+    try {
+        for (const f of readdirSync(panDir).filter((x) => x.endsWith('.js'))) {
+            try {
+                const m = await import(pathToFileURL(join(panDir, f)).href);
+                for (const [k, v] of Object.entries(m)) globalThis[k] = v;
+                if (m.default) globalThis[f.replace(/\.js$/, '')] = m.default;
+            } catch (e) { console.error(`pan load failed: ${f}: ${e.message}`); }
+        }
+        console.log(`pan preloaded: ${panDir}`);
+    } catch (e) { console.error(`pan dir missing: ${e.message}`); }
+  await loadAll();
     await app.listen({ port: Number(process.env.PORT || 0), host: '0.0.0.0' });
     console.log(`listening on 0.0.0.0:${app.server.address().port}`);
 }
