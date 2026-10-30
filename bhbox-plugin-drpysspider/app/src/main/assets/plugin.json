@@ -5,9 +5,9 @@
   "type": "spider",
   "spider": "ds",
   "mainClass": "bh.box.plugin.drpysspider.DrpysSpiderPlugin",
-  "downloadUrl": "",
-  "version": 100,
-  "versionName": "1.0.0",
+  "downloadUrl": "https://h-box-release.netlify.app/release/plugins/drpysspider.apk",
+  "version": 101,
+  "versionName": "1.0.1",
   "minSdk": 23,
   "minAppVersion": 383,
   "depends": ["bh.box.plugin.node"]
