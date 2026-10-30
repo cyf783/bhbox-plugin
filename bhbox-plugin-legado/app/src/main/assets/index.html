@@ -221,11 +221,11 @@ function doPick(input){
   if(f) insertLine('file://'+f.name);
 }
 
-// 文件选择：优先 File System Access API——宿主 WebView 提供仿写实现（f.__path 为
-// sdcard 相对路径，可生成完整 file:// 地址）；桌面 Chrome 有原生实现但拿不到路径；
-// 其余环境回退标准 input。注意不用 async/await（老 WebView 不支持会毁掉整段脚本）
+// 文件选择：宿主 WebView 注入 showOpenFilePicker 仿写（f.__path 为 sdcard 相对路径，可生成完整
+// file:// 地址；必须覆盖新版 WebView 的原生实现——原生拿不到真实路径）；桌面 Chrome 有原生实现
+// 但拿不到路径（f.__path 为空插文件名）；其余环境（showOpenFilePicker 调用失败）回退标准 input。
+// 注意不用 async/await（老 WebView 不支持会毁掉整段脚本）
 function pickFile(){
-  if(typeof window.showOpenFilePicker!=='function'){document.getElementById('fpick').click();return}
   var got=false;
   try{
     Promise.resolve(window.showOpenFilePicker()).then(function(hs){return hs[0].getFile()})
