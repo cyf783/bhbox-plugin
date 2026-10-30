@@ -35581,6 +35581,36 @@ main().catch((e) => {
   process.exit(1);
 });
 async function main() {
+  const appRoot = (0, import_path.join)(sourcesDir, "..");
+  try {
+    for (const f of (0, import_fs.readdirSync)((0, import_path.join)(appRoot, "utils")).filter((x) => x.endsWith(".js"))) {
+      try {
+        await import((0, import_url.pathToFileURL)((0, import_path.join)(appRoot, "utils", f)).href);
+      } catch (e) {
+        console.error(`utils load failed: ${f}: ${e.message}`);
+      }
+    }
+    console.log("utils preloaded");
+  } catch (e) {
+    console.error(`utils dir missing: ${e.message}`);
+  }
+  const panDir = (0, import_path.join)(appRoot, "pan");
+  try {
+    for (const f of (0, import_fs.readdirSync)(panDir).filter((x) => x.endsWith(".js"))) {
+      try {
+        const m = await import((0, import_url.pathToFileURL)((0, import_path.join)(panDir, f)).href);
+        for (const [k, v] of Object.entries(m))
+          globalThis[k] = v;
+        if (m.default)
+          globalThis[f.replace(/\.js$/, "")] = m.default;
+      } catch (e) {
+        console.error(`pan load failed: ${f}: ${e.message}`);
+      }
+    }
+    console.log(`pan preloaded: ${panDir}`);
+  } catch (e) {
+    console.error(`pan dir missing: ${e.message}`);
+  }
   await loadAll();
   await app.listen({ port: Number(process.env.PORT || 0), host: "0.0.0.0" });
   console.log(`listening on 0.0.0.0:${app.server.address().port}`);
