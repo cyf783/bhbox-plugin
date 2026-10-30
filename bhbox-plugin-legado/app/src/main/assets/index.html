@@ -1,0 +1,259 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#4338ca">
+<title>Legado 书源服务</title>
+<style>
+:root{--bg:#f4f5f7;--card:#fff;--ink:#1b1e27;--sub:#697182;--line:#e8eaef;--acc:#4f46e5;
+--acc-soft:#eef2ff;--code:#f5f6f8;--err:#d92d20;--warn:#b45309}
+@media(prefers-color-scheme:dark){:root{--bg:#0f1216;--card:#171b22;--ink:#e8eaf0;--sub:#8b93a3;
+--line:#272d38;--acc:#818cf8;--acc-soft:#232a45;--code:#10131a;--err:#f87171;--warn:#fbbf24}}
+*{box-sizing:border-box;margin:0;padding:0}
+[hidden]{display:none!important}
+body{font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','HarmonyOS Sans SC','Segoe UI',Roboto,'Noto Sans SC',sans-serif;
+background:var(--bg);color:var(--ink);-webkit-font-smoothing:antialiased;padding-bottom:44px}
+.wrap{max-width:640px;margin:0 auto;padding:0 16px}
+.top{background:linear-gradient(135deg,#4338ca,#7c3aed);color:#fff;padding:30px 0 54px}
+h1{font-size:22px;font-weight:700}
+.top .sub{margin-top:6px;font-size:13px;opacity:.85;line-height:1.5}
+.pills{margin-top:14px;display:flex;gap:8px;flex-wrap:wrap}
+.pill{background:rgba(255,255,255,.15);border:1px solid rgba(255,255,255,.28);border-radius:999px;
+padding:3px 12px;font-size:12px;display:inline-flex;align-items:center;gap:6px}
+.dot{width:7px;height:7px;border-radius:50%;background:#4ade80}
+.errbar{margin-top:14px;background:#fee4e2;color:var(--err);border-radius:10px;padding:10px 14px;font-size:13px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px 16px;margin-top:14px}
+.card.lift{margin-top:-32px;box-shadow:0 8px 24px rgba(16,24,40,.12)}
+h2{font-size:15px;font-weight:600;margin-bottom:10px}
+.cnt{float:right;font-size:12px;color:var(--sub);font-weight:400;margin-top:2px}
+.hint{font-size:12.5px;color:var(--sub);line-height:1.7}
+.hint.note{margin-top:12px}
+.urlbox{margin:10px 0 2px;background:var(--code);border:1px dashed var(--line);border-radius:10px;
+padding:11px 12px;font-size:13px;overflow-x:auto;white-space:nowrap}
+.urlbox code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:var(--acc)}
+.btns{display:flex;gap:10px;margin-top:12px;flex-wrap:wrap}
+.btn{appearance:none;-webkit-appearance:none;border:none;border-radius:10px;padding:9px 18px;
+font-size:14px;font-weight:500;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center}
+.btn.pri{background:var(--acc);color:#fff}.btn.pri:disabled{opacity:.6}
+.btn.ghost{background:var(--acc-soft);color:var(--acc)}
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:2px 0 4px}
+.st{background:var(--code);border-radius:10px;padding:10px 4px;text-align:center}
+.st b{display:block;font-size:18px}.st span{font-size:11px;color:var(--sub)}
+.st.bad b{color:var(--err)}
+.search{width:100%;border:1px solid var(--line);background:var(--code);border-radius:10px;
+padding:10px 12px;font-size:14px;color:var(--ink);margin:8px 0 2px;outline:none}
+.search:focus{border-color:var(--acc)}
+.ptext{width:100%;border:1px solid var(--line);background:var(--code);border-radius:10px;
+padding:10px 12px;font-size:13px;color:var(--ink);margin-top:8px;outline:none;
+font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;resize:vertical;min-height:64px}
+.ptext:focus{border-color:var(--acc)}
+.hint.note.warn{color:var(--warn)}
+.srcs{list-style:none;margin-top:4px}
+.srcs li{display:flex;justify-content:space-between;gap:12px;padding:9px 2px;
+border-bottom:1px solid var(--line);font-size:13.5px}
+.srcs li:last-child{border-bottom:none}
+.srcs .n{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.srcs .g{color:var(--sub);font-size:12px;flex-shrink:0;max-width:45%;overflow:hidden;
+text-overflow:ellipsis;white-space:nowrap}
+.plist{list-style:none;font-size:13px;line-height:1.8}
+.plist .e b{color:var(--err)}.plist .i b{color:var(--warn)}.plist .s b{color:var(--sub)}
+.empty{padding:18px 2px;font-size:13px;color:var(--sub);text-align:center}
+.foot{text-align:center;font-size:12px;color:var(--sub);margin-top:22px}
+.foot a{color:var(--sub)}
+</style>
+</head>
+<body>
+<div class="top"><div class="wrap">
+  <h1>Legado 书源服务</h1>
+  <p class="sub">legado 书源 → T4 协议，供 TVBox / 影视仓等应用订阅</p>
+  <div class="pills">
+    <span class="pill"><i class="dot"></i>运行中</span>
+    <span class="pill" id="pill-count">加载中…</span>
+    <span class="pill" id="pill-time" hidden></span>
+  </div>
+</div></div>
+<div class="wrap">
+  <p class="errbar" id="errbar" hidden>无法获取服务状态，请确认通过服务地址访问本页。</p>
+
+  <section class="card lift"><h2>订阅地址</h2>
+    <p class="hint">复制以下地址，添加为应用内的线路 / 接口配置：</p>
+    <div class="urlbox"><code id="suburl"></code></div>
+    <div class="btns">
+      <button class="btn pri" type="button" onclick="copySub(this)">复制地址</button>
+      <a class="btn ghost" href="/config" target="_blank">查看配置</a>
+    </div>
+  </section>
+
+  <section class="card"><h2>书源配置</h2>
+    <p class="hint">书源地址，保存后自动重载即时生效。每行一个：http(s):// 订阅地址，或 file:// 本地书源文件路径（可用「选择文件」快速插入，路径可手动修改）。</p>
+    <textarea class="ptext" id="p-remote" rows="6" placeholder="书源地址（每行一个：http(s):// 订阅或 file:// 本地文件路径）"></textarea>
+    <div class="btns">
+      <button class="btn pri" type="button" onclick="doSaveParams(this)">保存并重载</button>
+      <button class="btn ghost" type="button" onclick="pickFile()">选择文件</button>
+      <a class="btn ghost" href="/params" target="_blank">参数 JSON</a>
+    </div>
+    <input type="file" id="fpick" hidden onchange="doPick(this)">
+    <p class="hint note" id="p-st" hidden></p>
+  </section>
+
+  <section class="card"><h2>运行状态</h2>
+    <div class="stats">
+      <div class="st" id="st-ok"><b>-</b><span>可用源</span></div>
+      <div class="st" id="st-err"><b>-</b><span>加载失败</span></div>
+      <div class="st" id="st-inc"><b>-</b><span>不兼容</span></div>
+      <div class="st" id="st-skip"><b>-</b><span>已跳过</span></div>
+    </div>
+    <div class="btns">
+      <button class="btn pri" type="button" onclick="doReload(this)">重载书源</button>
+      <a class="btn ghost" href="/status" target="_blank">状态 JSON</a>
+    </div>
+  </section>
+
+  <section class="card" id="prob-card" hidden><h2>问题清单</h2>
+    <ul class="plist" id="plist"></ul>
+  </section>
+
+  <section class="card"><h2>书源列表<span class="cnt" id="cnt">-</span></h2>
+    <input class="search" id="q" type="search" placeholder="搜索名称或分组…" oninput="filt(this.value)">
+    <ul class="srcs" id="srcs"></ul>
+    <p class="empty" id="empty" hidden>暂无可用书源，请检查书源配置后点击「重载书源」。</p>
+    <p class="hint note">小说类源（novel://）需在 Mobile 端阅读，TV 端暂不支持。</p>
+  </section>
+
+  <p class="foot">Legado 书源服务 · <a href="/check" target="_blank">探活</a> · <a href="/">刷新本页</a></p>
+</div>
+<script>
+'use strict';
+function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;')
+  .replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
+
+function copySub(b){
+  var t=document.getElementById('suburl').textContent.trim();
+  var done=function(){var o=b.textContent;b.textContent='已复制';
+    setTimeout(function(){b.textContent=o},1500)};
+  var fb=function(){var i=document.createElement('textarea');i.value=t;
+    i.style.position='fixed';i.style.opacity='0';document.body.appendChild(i);i.select();
+    try{document.execCommand('copy');done()}catch(e){}
+    document.body.removeChild(i)};
+  if(navigator.clipboard&&navigator.clipboard.writeText){
+    navigator.clipboard.writeText(t).then(done,fb)}else{fb()}
+}
+
+function doReload(b){
+  if(b.disabled)return;b.disabled=true;b.textContent='重载中…';
+  fetch('/reload',{method:'POST'}).then(function(r){return r.json()})
+    .then(function(j){b.disabled=false;b.textContent='重载书源';loadStatus()})
+    .catch(function(){b.disabled=false;b.textContent='重载失败，点此重试'});
+}
+
+function filt(v){
+  v=v.trim().toLowerCase();
+  var lis=document.getElementById('srcs').children,n=0;
+  for(var i=0;i<lis.length;i++){
+    var hit=lis[i].getAttribute('data-k').indexOf(v)>=0;
+    lis[i].style.display=hit?'':'none';if(hit)n++;
+  }
+  document.getElementById('cnt').textContent=n;
+}
+
+function setSt(id,v,bad){var el=document.getElementById(id);
+  el.querySelector('b').textContent=v;el.classList.toggle('bad',bad)}
+
+function render(d){
+  var rep=d.report||{},errs=rep.errors||[],inc=rep.incompatible||[],skip=rep.skipped||[];
+  document.getElementById('pill-count').textContent=d.usable+' 个可用源';
+  var t=document.getElementById('pill-time');
+  if(d.loadedAt){t.hidden=false;
+    t.textContent='加载于 '+String(d.loadedAt).slice(0,19).replace('T',' ')}
+  setSt('st-ok',d.usable,false);
+  setSt('st-err',errs.length,errs.length>0);
+  setSt('st-inc',inc.length,inc.length>0);
+  setSt('st-skip',skip.length,skip.length>0);
+  var html='';
+  errs.forEach(function(e){html+='<li class="e"><b>加载失败</b> '
+    +esc(e.from)+'：'+esc(e.error)+'</li>'});
+  inc.forEach(function(e){html+='<li class="i"><b>不兼容</b> '
+    +esc(e.name)+'：'+esc(e.reason)+'</li>'});
+  skip.forEach(function(e){html+='<li class="s"><b>跳过</b> '
+    +esc(e.name)+'：'+esc(e.reason)+'</li>'});
+  document.getElementById('plist').innerHTML=html;
+  document.getElementById('prob-card').hidden=html==='';
+  var srcs=d.sources||[];html='';
+  srcs.forEach(function(s){var g=s.group||'';
+    html+='<li data-k="'+esc((s.name+' '+g).toLowerCase())
+      +'"><span class="n">'+esc(s.name)+'</span><span class="g">'+esc(g)+'</span></li>'});
+  document.getElementById('srcs').innerHTML=html;
+  document.getElementById('cnt').textContent=srcs.length;
+  document.getElementById('empty').hidden=srcs.length>0;
+  document.getElementById('q').hidden=srcs.length===0;
+}
+
+function loadStatus(){
+  fetch('/status').then(function(r){return r.json()}).then(function(d){
+    document.getElementById('errbar').hidden=true;render(d);
+  }).catch(function(){
+    document.getElementById('errbar').hidden=false;
+    document.getElementById('pill-count').textContent='状态未知';
+  });
+}
+
+function loadParams(){
+  fetch('/params').then(function(r){return r.json()}).then(function(d){
+    document.getElementById('p-remote').value=d.remoteUrls||'';
+  }).catch(function(){});
+}
+
+// 插入一条书源地址（去重）
+function insertLine(line){
+  var ta=document.getElementById('p-remote');
+  var cur=ta.value.replace(/\s+$/,'');
+  var exists=cur.split('\n').indexOf(line)>=0;
+  if(!exists) ta.value=cur===''?line:cur+'\n'+line;
+  var st=document.getElementById('p-st');
+  st.hidden=false;st.classList.remove('warn');
+  st.textContent=(exists?'地址已存在：':'已插入 '+line+'，')+'点「保存并重载」生效';
+}
+
+// 标准回退：普通浏览器拿不到设备绝对路径，仅按文件名拼 file:// 行（路径可手动调整）
+function doPick(input){
+  var f=input.files&&input.files[0];input.value='';
+  if(f) insertLine('file://'+f.name);
+}
+
+// 文件选择：优先 File System Access API——宿主 WebView 提供仿写实现（f.__path 为
+// sdcard 相对路径，可生成完整 file:// 地址）；桌面 Chrome 有原生实现但拿不到路径；
+// 其余环境回退标准 input。注意不用 async/await（老 WebView 不支持会毁掉整段脚本）
+function pickFile(){
+  if(typeof window.showOpenFilePicker!=='function'){document.getElementById('fpick').click();return}
+  var got=false;
+  try{
+    Promise.resolve(window.showOpenFilePicker()).then(function(hs){return hs[0].getFile()})
+      .then(function(f){got=true;insertLine('file://'+(f.__path||f.name))})
+      .catch(function(e){if(!got&&(!e||e.name!=='AbortError'))document.getElementById('fpick').click()});
+  }catch(e){document.getElementById('fpick').click()}
+}
+
+function doSaveParams(b){
+  if(b.disabled)return;b.disabled=true;b.textContent='保存中…';
+  var st=document.getElementById('p-st');
+  var payload=JSON.stringify({remoteUrls:document.getElementById('p-remote').value});
+  fetch('/params',{method:'POST',headers:{'Content-Type':'text/plain'},
+    body:btoa(unescape(encodeURIComponent(payload)))})
+    .then(function(r){return r.json()}).then(function(j){
+      b.disabled=false;b.textContent='保存并重载';
+      st.hidden=false;
+      if(!j.ok){st.classList.add('warn');st.textContent='保存失败：'+(j.error||'未知错误');return}
+      st.classList.remove('warn');
+      st.textContent='已保存并重载：'+(j.usable||0)+' 个可用源。';
+      loadStatus();
+    })
+    .catch(function(){b.disabled=false;b.textContent='保存失败，点此重试'});
+}
+
+document.getElementById('suburl').textContent=location.origin+'/config';
+loadStatus();
+loadParams();
+</script>
+</body>
+</html>

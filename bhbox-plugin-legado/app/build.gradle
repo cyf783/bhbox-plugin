@@ -1,5 +1,6 @@
 plugins {
     id 'com.android.application'
+    id 'org.jetbrains.kotlin.android'
 }
 
 android {
@@ -10,8 +11,8 @@ android {
         applicationId "bh.box.plugin.legado"
         minSdk rootProject.ext.minSdk
         targetSdk rootProject.ext.targetSdk
-        versionCode 100
-        versionName "1.0.0"
+        versionCode 101
+        versionName "1.0.1"
         ndk { abiFilters "arm64-v8a" }
     }
 
@@ -33,10 +34,46 @@ android {
             useLegacyPackaging = true
         }
     }
+
+    // Kotlin 与 Java 字节码目标对齐（Java 侧默认 1.8）
+    kotlinOptions {
+        jvmTarget = '1.8'
+    }
 }
 
 dependencies {
-    compileOnly 'com.github.cyf783:bhbox-catvod:1.0.0'
+    // 插件接口与宿主运行时由宿主 classloader 提供（宿主 proguard keep com.github.catvod.**），
+    // transitive=false：只用其自身接口类（IServicePlugin/Plugin/LOG/Shell/bean），
+    // api 传递的 logger/guava/preference 一概不用——logger 会拖进 support-annotations 老依赖
+    compileOnly('com.github.cyf783:bhbox-catvod:1.0.5') {
+        transitive = false
+    }
+
+    // ===== 书源解析引擎（进程内自研，替代 node 版）=====
+    // JS 引擎：Rhino，阅读 app 官方同款，书源 JS 兼容性最佳，纯 Java 零 .so（宿主无 rhino，必须自带）
+    implementation 'org.mozilla:rhino:1.7.15'
+    // HTML 解析 + 迷你 XPath 支持（宿主 release 混淆未 keep jsoup，原名不存在，必须自带）
+    implementation "org.jsoup:jsoup:$rootProject.ext.jsoupVersion"
+    // HTTP 抓取（进程内 okhttp 连接池，替代 node 版 execFileSync 子进程 spawn）。
+    // compileOnly：宿主 proguard keep okhttp3.**/okio.**（原名保留）且版本同为 5.3.2，
+    // 运行时由宿主 classloader 提供（DexClassLoader parent-first）；若宿主删该 keep 规则需同步还原。
+    // 用 okhttp-android 变体坐标：com.squareup.okhttp3:okhttp 是 KMP 壳（available-at 转发，
+    // 弱网/离线环境变体解析易失败），直接声明 android 变体直取 aar，类完全一致
+    compileOnly "com.squareup.okhttp3:okhttp-android:$rootProject.ext.okhttpVersion"
+    // 书源 JSON 与 T4 响应构造。compileOnly：宿主 proguard keep com.google.gson.** 且版本同为 2.13.2
+    compileOnly "com.google.code.gson:gson:$rootProject.ext.gsonVersion"
+    // T4 HTTP 服务端（宿主虽有同版本 2.3.1，但 release 混淆未 keep fi.iki.elonen，原名不存在，
+    // 故插件自带副本：与宿主混淆后的改名类不同名，天然无冲突）
+    implementation 'org.nanohttpd:nanohttpd:2.3.1'
+
+    // ===== legado vendored 解析层（Kotlin 源码原样抄入 src/main/kotlin）依赖 =====
+    // HTML 解析（Kotlin 层 AnalyzeByJSoup/AnalyzeByXPath/XPathEvaluator 直接用 ksoup，
+    // 与 Java 层真 jsoup 共存：包名不同 com.fleeksoft.ksoup vs org.jsoup，零冲突）
+    implementation 'com.fleeksoft.ksoup:ksoup:0.2.6'
+    // JSONPath 引擎 AnalyzeByJSonPath 的 JSON 模型（rjpath 依赖其 JsonElement 类型）
+    implementation 'org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0'
+    // RuleRegex.kt 编译缓存的无锁 CAS（AtomicCas.casUpdate 依赖 AtomicRef）
+    implementation 'org.jetbrains.kotlinx:atomicfu:0.33.0'
 }
 
 // 零依赖自写混淆字典任务（共享脚本，取代 cleverpumpkin proguard-dictionaries-generator 插件）

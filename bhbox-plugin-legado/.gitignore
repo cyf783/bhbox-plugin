@@ -1,10 +1,16 @@
+# Gradle / 构建产物
+.gradle/
+build/
+
+# IDE
+.idea/
 *.iml
-.gradle
+
+# 本地环境
 /local.properties
-/.idea
+
+# Kotlin 编译器缓存
+.kotlin/
+
+# macOS
 .DS_Store
-/build
-/app/build
-/captures
-.externalNativeBuild
-.cxx

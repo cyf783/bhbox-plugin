@@ -1,5 +1,8 @@
 plugins {
     id 'com.android.application' version '8.5.1' apply false
+    // Kotlin 化：vendor legado 解析层 Kotlin 源码（io.legado.app.model.analyzeRule 等）
+    // 版本与 legado 一致：ksoup 0.2.6 / serialization 1.11.0 元数据为 2.3.0，低版本编译器不可读
+    id 'org.jetbrains.kotlin.android' version '2.3.20' apply false
 }
 
 // 以下 ext 与 bhbox 根工程保持一致，供 :app 模块 build.gradle 通过 rootProject.ext.* 引用
