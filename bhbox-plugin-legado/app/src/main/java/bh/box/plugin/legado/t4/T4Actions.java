@@ -756,31 +756,31 @@ public final class T4Actions {
         Map<String, Object> ctx = makeCtx(source, bookUrl, null, null, book, null, null, snap);
         Map<String, Object> info = mapOrEmpty(SourceManager.mapGet(source, "ruleBookInfo"));
 
-        String content;
-        try {
-            content = fetchPage(ctx, bookUrl);
-        } catch (Exception e) {
-            content = null;
-        }
-        // 换站源自愈：收藏时的 bookUrl 域名可能已失效（爱丽丝等动态站源）——
-        // 首抓失败/无效时用**当前源 URL 的域名**重写 bookUrl 再试一次
-        // （对齐书源 preUpdateJs 的换域逻辑，只是提前到 BookInfo 阶段做容错）
+        // 换站源自愈（对齐书源 preUpdateJs 换域逻辑，提前到 BookInfo 做容错）：
+        // 收藏时的 bookUrl 域名可能已失效（爱丽丝等动态站源，主站被墙）。
+        // 顺序：**当前线路优先**（sourl，可用性高），失败再试收藏时的原域——
+        // 快路径先走，避免失效域 20s 超时拖慢打开。
         String curHost = currentSourceHost(source, book);
-        System.err.println("[DBG-HEAL] curHost=" + curHost + " bookUrl=" + bookUrl
-                + " contentNull=" + (content == null));
-        if ((content == null || isInvalidBookPage(content)) && curHost != null
-                && bookUrl.contains("://") && !bookUrl.startsWith(curHost)) {
-            String rewritten = bookUrl.replaceFirst("https?://[^/]+", curHost);
+        String content = null;
+        String bookUrlTried = bookUrl;
+        if (curHost != null && bookUrl.contains("://") && !bookUrl.startsWith(curHost)) {
             try {
-                String c2 = fetchPage(ctx, rewritten);
-                if (c2 != null && !isInvalidBookPage(c2)) {
-                    content = c2;
-                    bookUrl = rewritten;
-                    book.put("bookUrl", rewritten);
-                }
+                content = fetchPage(ctx, bookUrl.replaceFirst("https?://[^/]+", curHost));
+                if (isInvalidBookPage(content)) content = null;
+                else bookUrlTried = bookUrl.replaceFirst("https?://[^/]+", curHost);
             } catch (Exception ignore) {
             }
         }
+        if (content == null) {
+            try {
+                content = fetchPage(ctx, bookUrl);
+                if (isInvalidBookPage(content)) content = null;
+                else bookUrlTried = bookUrl;
+            } catch (Exception e) {
+                content = null;
+            }
+        }
+        if (content != null) bookUrl = bookUrlTried;
         if (content == null) return emptyDetail("抓取失败");
         RuleAnalyzer.Repr contentRepr = RuleAnalyzer.makeContent(content);
 
@@ -800,6 +800,7 @@ public final class T4Actions {
                     .matcher(String.valueOf(initRule));
             if (pm.find()) {
                 RuleAnalyzer.evalPutMap(pm.group(), contentRepr, ctx);
+
             }
         }
 
@@ -821,6 +822,9 @@ public final class T4Actions {
         String tocUrlRaw = tocRule != null ? RuleAnalyzer.evalRule(String.valueOf(tocRule), contentRepr, ctx, true).trim() : "";
         String tocUrl0 = !tocUrlRaw.isEmpty() ? absRule(tocUrlRaw, bookUrl) : bookUrl;
         String tocUrl = tocUrl0;
+        // preUpdateJs 读 book.tocUrl（阅读里 Book 实例搜索阶段已存）——
+        // T4 无状态，此处预置当前求值结果防 undefined 字符串污染
+        book.put("tocUrl", tocUrl);
         // 对齐阅读 WebBook.getChapterListAwait：目录抓取前执行 ruleToc.preUpdateJs（book 上下文，
         // 爱丽丝书屋靠它把 book.bookUrl 域名切到当前站源）
         Map<String, Object> ruleTocMap = mapOrEmpty(SourceManager.mapGet(source, "ruleToc"));
@@ -843,6 +847,7 @@ public final class T4Actions {
             }
         }
         List<Map<String, Object>> chapters = loadToc(ctx, tocUrl, ruleTocMap);
+
         // 书名与目录双空 → 页面无效（404/验证码等），返回空列表
         if (name.isEmpty() && chapters.isEmpty()) return emptyDetail(null);
 
@@ -918,8 +923,10 @@ public final class T4Actions {
         if (html == null) return true;
         String t = html.trim();
         if (t.length() < 500) return true;
-        return t.contains("Checking your browser") || t.contains("404")
-                || t.contains("小说被禁用或已删除");
+        if (t.contains("Checking your browser")) return true;
+        // 404/禁用判定只在轻量页上做（34K 完整页 CSS/JS 可能含 "404" 字样误伤）
+        if (t.length() < 5000 && (t.contains("404") || t.contains("小说被禁用或已删除"))) return true;
+        return false;
     }
 
     /** node: get(field) = analyzeStr(content, info[field]||'', ctx).trim()（空规则 → ''） */
