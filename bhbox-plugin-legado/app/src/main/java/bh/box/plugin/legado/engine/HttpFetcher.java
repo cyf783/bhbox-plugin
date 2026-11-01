@@ -118,9 +118,36 @@ public final class HttpFetcher {
      * @return HttpResult（含重定向后 finalUrl）
      * @throws RuntimeException 网络失败，或 非 2xx 且响应体为空（对齐 http.js#fetchText）
      */
+    private static volatile Boolean webviewCookiesOk;
+
     public static HttpResult fetch(String url, String method, Map<String, String> headers, String body, String charset) {
         String m = (method == null || method.trim().isEmpty()) ? "GET" : method.trim().toUpperCase(Locale.ROOT);
         Request.Builder rb = new Request.Builder().url(url);
+        // 宿主 WebView 登录态通用注入：登录面板打开过登录页后，系统 WebView
+        // CookieManager 持有站点会话 cookie（如长佩 lf_user_auth、爱丽丝 lf_*）。
+        // OkHttp 与 WebView cookie 存储互不相通，此处将命中的 cookie 附加到请求
+        // （书源显式 Cookie 头优先，不覆盖）。桌面 harness 无 CookieManager，反射
+        // 一次探测后跳过（webviewCookiesOk 缓存判定结果）。
+        if (webviewCookiesOk == null) {
+            try {
+                Class.forName("android.webkit.CookieManager");
+                webviewCookiesOk = Boolean.TRUE;
+            } catch (Throwable t) {
+                webviewCookiesOk = Boolean.FALSE;
+            }
+        }
+        if (webviewCookiesOk) {
+            try {
+                Class<?> cm = Class.forName("android.webkit.CookieManager");
+                Object inst = cm.getMethod("getInstance").invoke(null);
+                String wc = (String) cm.getMethod("getCookie", String.class).invoke(inst, url);
+                if (wc != null && !wc.isEmpty()) {
+                    boolean hasCookieHeader = headers != null && headers.containsKey("Cookie");
+                    if (!hasCookieHeader) rb.header("Cookie", wc);
+                }
+            } catch (Throwable ignored) {
+            }
+        }
         if (headers != null) {
             for (Map.Entry<String, String> e : headers.entrySet()) {
                 if (e.getKey() == null || e.getValue() == null) continue;

@@ -6,6 +6,7 @@ import bh.box.plugin.legado.LegadoPlugin;
 
 import com.github.catvod.utils.Plugin;
 import com.google.gson.Gson;
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 
 import java.io.IOException;
@@ -221,6 +222,100 @@ public final class T4Server extends NanoHTTPD {
             if (method == Method.POST && "/login/set".equals(uri)) {
                 return handleLoginSet(session);
             }
+            if (method == Method.POST && "/login/token".equals(uri)) {
+                return handleLoginToken(session);
+            }
+            if (method == Method.POST && "/login/action".equals(uri)) {
+                // loginUi 按钮 action 执行（对齐阅读 SourceLoginDialog.handleButtonClick）：
+                // evalJS(loginJS + action)，result=表单值 {name:value}，source 桥可用
+                Map<String, String> files = new LinkedHashMap<>();
+                session.parseBody(files);
+                String raw = files.get("postData");
+                if (raw == null || raw.trim().isEmpty())
+                    return json(Response.Status.BAD_REQUEST, kv("error", "empty body"));
+                JsonObject in = GSON.fromJson(raw, JsonObject.class);
+                String sk = in != null && in.has("sk") && !in.get("sk").isJsonNull()
+                        ? in.get("sk").getAsString() : null;
+                String action = in != null && in.has("action") && !in.get("action").isJsonNull()
+                        ? in.get("action").getAsString() : null;
+                if (sk == null || action == null || action.trim().isEmpty())
+                    return json(Response.Status.BAD_REQUEST, kv("error", "missing sk/action"));
+                if (action.startsWith("http://") || action.startsWith("https://"))
+                    return json(Response.Status.OK, kv("openUrl", action));
+                Map<String, Object> src = findSourceBySk(sk);
+                if (src == null) return json(Response.Status.NOT_FOUND, kv("error", "source not found"));
+                Object loginUrl = SourceManager.mapGet(src, "loginUrl");
+                String loginJs = (loginUrl instanceof String && !((String) loginUrl).trim().isEmpty()
+                        && !((String) loginUrl).trim().startsWith("http"))
+                        ? (String) loginUrl : "";
+                Object jsLibObj = SourceManager.mapGet(src, "jsLib");
+                String jsLib = jsLibObj instanceof String ? (String) jsLibObj : "";
+                String js = (jsLib.isEmpty() ? "" : jsLib + "\n;\n")
+                        + (loginJs.isEmpty() ? "" : loginJs + "\n;\n") + action;
+                Map<String, Object> b = new LinkedHashMap<>();
+                b.put("source", src.get("__bridge__") != null ? src.get("__bridge__") : src);
+                Object bookObj = SourceManager.mapGet(src, "__book__");
+                b.put("book", bookObj != null ? bookObj : new LinkedHashMap<String, Object>());
+                Map<String, Object> form = new LinkedHashMap<>();
+                if (in.has("form") && in.get("form").isJsonObject()) {
+                    for (Map.Entry<String, JsonElement> e : in.getAsJsonObject("form").entrySet()) {
+                        form.put(e.getKey(), e.getValue().isJsonNull() ? "" : e.getValue().getAsString());
+                    }
+                }
+                b.put("result", form);
+                b.put("java", new bh.box.plugin.legado.engine.JsExtensions(b));
+                if (!(b.get("source") instanceof bh.box.plugin.legado.engine.SourceBridge)) {
+                    b.put("source", new bh.box.plugin.legado.engine.SourceBridge(sk, src));
+                }
+                Object out;
+                try {
+                    out = bh.box.plugin.legado.engine.JsEngine.eval(js, b);
+                } catch (Exception e) {
+                    return json(Response.Status.OK, kv("ok", false, "error", String.valueOf(e.getMessage())));
+                }
+                String outStr = out == null ? "" : String.valueOf(out);
+                return json(Response.Status.OK, kv("ok", true, "result",
+                        outStr.length() > 2000 ? outStr.substring(0, 2000) : outStr));
+            }
+            if (method == Method.GET && "/login/poll".equals(uri)) {
+                // 面板轮询：startBrowserAwait 挂起的验证请求（横幅引导用户操作）
+                Map<String, String> q = queryParams(session);
+                String sk = q.get("sk");
+                Object pending = sk != null
+                        ? bh.box.plugin.legado.engine.JsExtensions.PENDING_VERIFY.get(sk) : null;
+                return json(Response.Status.OK, kv("pending", pending));
+            }
+            if (method == Method.POST && "/login/confirm".equals(uri)) {
+                // 用户在面板点「我已完成验证」→ 解除 startBrowserAwait 阻塞
+                Map<String, String> files = new LinkedHashMap<>();
+                session.parseBody(files);
+                String raw = files.get("postData");
+                String sk = null;
+                if (raw != null && !raw.trim().isEmpty()) {
+                    JsonObject in = GSON.fromJson(raw, JsonObject.class);
+                    if (in != null && in.has("sk") && !in.get("sk").isJsonNull()) {
+                        sk = in.get("sk").getAsString();
+                    }
+                }
+                if (sk != null) bh.box.plugin.legado.engine.JsExtensions.markVerifyConfirmed(sk);
+                return json(Response.Status.OK, kv("ok", true));
+            }
+            if (method == Method.GET && "/login/open".equals(uri)) {
+                // 登录跳转：302 到源的 loginUrl；bhbox_sk Cookie 携带源 key——
+                // 宿主 WebViewDialog onResult 抓到 token 后凭 Cookie 里的 sk 回传
+                Map<String, String> q = queryParams(session);
+                String sk = q.get("sk");
+                String url = q.get("url");
+                if (sk == null || sk.isEmpty() || url == null
+                        || !(url.startsWith("http://") || url.startsWith("https://"))) {
+                    return json(Response.Status.BAD_REQUEST, kv("error", "missing sk or url"));
+                }
+                Response r = newChunkedResponse(Response.Status.REDIRECT, "text/plain",
+                        new java.io.ByteArrayInputStream(new byte[0]));
+                r.addHeader("Location", url);
+                r.addHeader("Set-Cookie", "bhbox_sk=" + sk + "; Path=/; Max-Age=86400");
+                return r;
+            }
             if (method == Method.GET && uri.startsWith("/api/")) {
                 awaitSources();
                 return handleApi(uri.substring("/api/".length()), queryParams(session));
@@ -258,6 +353,41 @@ public final class T4Server extends NanoHTTPD {
                 item.put("loginUrl", "");
                 item.put("loginJs", false);
             }
+            // 登录按钮面板（loginUi JSON）原始串（面板渲染表单+按钮；action 经
+            // /login/action 执行——对齐阅读 SourceLoginDialog）
+            Object loginUi = SourceManager.mapGet(src, "loginUi");
+            if (loginUi instanceof String && !((String) loginUi).trim().isEmpty()) {
+                item.put("loginUiRaw", loginUi);
+                try {
+                    List<Object> btns = new ArrayList<>();
+                    JsonElement el = GSON.fromJson((String) loginUi, JsonElement.class);
+                    if (el != null && el.isJsonArray()) {
+                        for (JsonElement e : el.getAsJsonArray()) {
+                            if (e.isJsonObject()) {
+                                JsonObject o = e.getAsJsonObject();
+                                String nm = o.has("name") ? o.get("name").getAsString() : "";
+                                String act = o.has("action") ? o.get("action").getAsString() : "";
+                                String ty = o.has("type") ? o.get("type").getAsString() : "button";
+                                if (!nm.isEmpty() && !ty.equals("button")) {
+                                    // 输入行：text/password/select/toggle
+                                    LinkedHashMap<String, Object> row = new LinkedHashMap<>();
+                                    row.put("name", nm);
+                                    row.put("type", ty);
+                                    btns.add(row);
+                                } else if (!nm.isEmpty()) {
+                                    LinkedHashMap<String, Object> row = new LinkedHashMap<>();
+                                    row.put("name", nm);
+                                    row.put("type", "button");
+                                    row.put("action", act);
+                                    btns.add(row);
+                                }
+                            }
+                        }
+                    }
+                    item.put("loginButtons", btns);
+                } catch (Exception ignore) {
+                }
+            }
             out.add(item);
         }
         return json(Response.Status.OK, kv("logins", out));
@@ -293,6 +423,33 @@ public final class T4Server extends NanoHTTPD {
             return json(Response.Status.BAD_REQUEST, kv("error", "missing sk"));
         bridgeOf(sk).jsSetVariable(variable);
         return json(Response.Status.OK, kv("ok", true, "sk", sk));
+    }
+
+    /** POST /login/token：WebView 抓取的登录 token 写入源级变量池
+     *  {sk, key, token}（长佩 cp_token 等；java.put 池跨请求共享，play 直接命中） */
+    private Response handleLoginToken(IHTTPSession session) throws IOException, ResponseException {
+        Map<String, String> files = new LinkedHashMap<>();
+        session.parseBody(files);
+        String raw = files.get("postData");
+        if (raw == null || raw.trim().isEmpty())
+            return json(Response.Status.BAD_REQUEST, kv("error", "empty body"));
+        JsonObject in = GSON.fromJson(raw, JsonObject.class);
+        if (in == null) return json(Response.Status.BAD_REQUEST, kv("error", "bad json"));
+        String sk = in.has("sk") && !in.get("sk").isJsonNull() ? in.get("sk").getAsString() : null;
+        String key = in.has("key") && !in.get("key").isJsonNull() ? in.get("key").getAsString() : "cp_token";
+        String token = in.has("token") && !in.get("token").isJsonNull() ? in.get("token").getAsString() : "";
+        if (sk == null || sk.trim().isEmpty())
+            return json(Response.Status.BAD_REQUEST, kv("error", "missing sk"));
+        if (!token.isEmpty()) T4Actions.putSourceVar(sk, key, token);
+        return json(Response.Status.OK, kv("ok", true, "sk", sk, "key", key));
+    }
+
+    private Map<String, Object> findSourceBySk(String sk) {
+        for (Map<String, Object> src : state.list) {
+            String url = SourceManager.strOrEmpty(SourceManager.mapGet(src, "bookSourceUrl")).trim();
+            if (url.equals(sk)) return src;
+        }
+        return null;
     }
 
     /** 源 key → SourceBridge（properties 取该源 Map，桥复用 __bridge__ 与 JS 侧同实例） */

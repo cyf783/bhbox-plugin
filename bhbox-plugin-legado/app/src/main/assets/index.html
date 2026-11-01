@@ -76,6 +76,14 @@ text-overflow:ellipsis;white-space:nowrap}
 <div class="wrap">
   <p class="errbar" id="errbar" hidden>无法获取服务状态，请确认通过服务地址访问本页。</p>
 
+  <div id="verify-bar" hidden style="background:#fff7e6;color:var(--warn);border-radius:10px;padding:12px 14px;margin-top:14px;font-size:13.5px">
+    <b>⚠️ 等待验证</b> <span id="verify-text"></span>
+    <div class="btns" style="margin-top:8px">
+      <button class="btn pri" style="padding:6px 14px;font-size:13px" type="button" id="verify-open">打开验证页</button>
+      <button class="btn ghost" style="padding:6px 14px;font-size:13px" type="button" onclick="verifyDone()">我已完成</button>
+    </div>
+  </div>
+
   <section class="card lift"><h2>订阅地址</h2>
     <p class="hint">复制以下地址，添加为应用内的线路 / 接口配置：</p>
     <div class="urlbox"><code id="suburl"></code></div>
@@ -121,6 +129,7 @@ text-overflow:ellipsis;white-space:nowrap}
     <div id="lg-editor" hidden>
       <p class="hint" id="lg-title" style="font-weight:600;color:var(--ink);margin-top:10px"></p>
       <p class="hint" id="lg-url" hidden>登录地址：<a id="lg-link" href="#" target="_blank" style="color:var(--acc)">打开登录页</a>（在网页里登录后，本站 Cookie/登录态留存于应用 WebView）</p>
+      <div id="lg-ui" hidden><p class="hint" style="font-weight:600;color:var(--ink);margin-top:10px">源内面板</p><div id="lg-rows"></div></div>
       <textarea class="ptext" id="lg-var" rows="5" placeholder="源变量 JSON（如 {"sourl":"https://…"}），留空清除"></textarea>
       <div class="btns">
         <button class="btn pri" type="button" onclick="lgSave(this)">保存变量</button>
@@ -280,8 +289,11 @@ function loadLogins(){
     document.getElementById('lg-cnt').textContent=list.length;
     var html='';
     list.forEach(function(x,i){
+      var btns=x.loginButtons&&x.loginButtons.length
+        ?'<span class="g">源内按钮：'+x.loginButtons.map(lgEsc).join('、')+'</span>':'';
       var tag=x.loginUrl?'<button class="btn ghost" style="padding:4px 12px;font-size:12px" onclick="lgOpen(\''+lgEsc(x.key)+'\')">打开登录页</button>'
-             :(x.loginJs?'<span class="g">JS登录面板</span>':'');
+             :(x.loginJs?'<span class="g">JS登录面板</span>':btns);
+      if(x.loginUrl&&btns)tag+=btns;
       html+='<li data-k="'+lgEsc((x.name).toLowerCase())+'" data-i="'+i+'">'
         +'<span class="n" style="cursor:pointer" onclick="lgEdit(\''+lgEsc(x.key)+'\',\''+lgEsc(x.name)+'\')">'+lgEsc(x.name)+'</span>'
         +'<span class="g">'+tag
@@ -308,18 +320,66 @@ function lgEdit(key,name){
   document.getElementById('lg-editor').hidden=false;
   document.getElementById('lg-title').textContent='源变量 — '+name;
   var u=document.getElementById('lg-url');
-  if(x&&x.loginUrl){u.hidden=false;document.getElementById('lg-link').href=x.loginUrl;}
+  if(x&&x.loginUrl){u.hidden=false;document.getElementById('lg-link').href='/login/open?sk='+encodeURIComponent(key)+'&url='+encodeURIComponent(x.loginUrl);}
   else u.hidden=true;
   var st=document.getElementById('lg-st');st.hidden=true;
+  // loginUi 渲染（对齐阅读 SourceLoginDialog：按钮/输入行；action 经 /login/action）
+  var rows=document.getElementById('lg-rows');rows.innerHTML='';
+  var ui=x&&x.loginUiRaw?null:null;
+  try{ui=JSON.parse(x&&x.loginUiRaw||'null')}catch(e){ui=null}
+  var hasUi=ui&&ui.length;
+  document.getElementById('lg-ui').hidden=!hasUi;
+  if(hasUi){
+    ui.forEach(function(row,idx){
+      if(row.type==='button'){
+        if(!row.action)return; // 无 action 的分隔行
+        var b=document.createElement('button');b.className='btn ghost';
+        b.style.cssText='padding:6px 14px;font-size:13px;margin:4px 6px 0 0';
+        b.textContent=row.name;
+        b.onclick=function(){lgRunAction(row.name,row.action)};
+        rows.appendChild(b);
+      }else{
+        var wrap=document.createElement('div');
+        wrap.style.marginTop='8px';
+        var lab=document.createElement('label');
+        lab.style.cssText='font-size:12.5px;color:var(--sub)';
+        lab.textContent=row.name;
+        var inp=document.createElement('input');
+        inp.className='search';inp.dataset.lgname=row.name;
+        if(row.type==='password')inp.type='password';
+        inp.style.marginTop='4px';
+        wrap.appendChild(lab);wrap.appendChild(inp);
+        rows.appendChild(wrap);
+      }
+    });
+  }
   fetch('/login/get?sk='+encodeURIComponent(key)).then(function(r){return r.json()})
     .then(function(j){document.getElementById('lg-var').value=j.variable||''})
     .catch(function(){document.getElementById('lg-var').value=''});
   document.getElementById('lg-editor').scrollIntoView({behavior:'smooth',block:'nearest'});
 }
+function lgRunAction(name,action){
+  var form={};
+  var inputs=document.getElementById('lg-rows').querySelectorAll('input[data-lgname]');
+  inputs.forEach(function(i){form[i.dataset.lgname]=i.value});
+  var st=document.getElementById('lg-st');st.hidden=false;st.classList.remove('warn');
+  st.textContent='执行「'+name+'」…';
+  fetch('/login/action',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({sk:LG_CUR.key,action:action,form:form})})
+    .then(function(r){return r.json()}).then(function(j){
+      if(j.openUrl){window.open(j.openUrl,'_blank');st.textContent='已打开：'+j.openUrl;return}
+      st.textContent=j.ok?('执行完成'+(j.result?'：'+j.result:'')):('执行失败：'+(j.error||'未知'));
+      if(!j.ok)st.classList.add('warn');
+    }).catch(function(){st.classList.add('warn');st.textContent='执行失败，请重试'});
+}
 function lgClose(){document.getElementById('lg-editor').hidden=true;LG_CUR=null}
 function lgOpen(key){
   var x=lgFind(key);
-  if(x&&x.loginUrl)window.open(x.loginUrl,'_blank');
+  if(!(x&&x.loginUrl))return;
+  var st=document.getElementById('lg-st');st.hidden=false;st.classList.remove('warn');
+  st.textContent='已打开登录页：登录完成后本页会自动收到登录态（宿主回传），完成后回来刷新。';
+  // 经插件 /login/open 302 跳转：同时 Set-Cookie bhbox_sk=<key>（宿主 token 回传凭据）
+  location.href='/login/open?sk='+encodeURIComponent(key)+'&url='+encodeURIComponent(x.loginUrl);
 }
 function lgSave(b){
   if(!LG_CUR||b.disabled)return;b.disabled=true;b.textContent='保存中…';
@@ -335,10 +395,53 @@ function lgSave(b){
     .catch(function(){b.disabled=false;b.textContent='保存失败，点此重试'});
 }
 
+// ===== startBrowserAwait 验证横幅（面板协作） =====
+var VERIFY_SK=null;
+function verifyPoll(){
+  fetch('/logins').then(function(r){return r.json()}).then(function(d){
+    var list=d.logins||[];
+    var chain=Promise.resolve();
+    list.forEach(function(x){
+      chain=chain.then(function(){
+        return fetch('/login/poll?sk='+encodeURIComponent(x.key))
+          .then(function(r){return r.json()})
+          .then(function(j){
+            if(j.pending&&!document.getElementById('verify-bar').__shown){
+              VERIFY_SK=x.key;
+              document.getElementById('verify-text').textContent=
+                '书源「'+x.name+'」正在等待验证/登录，请点「打开验证页」完成操作，完成后点「我已完成」。';
+              document.getElementById('verify-open').onclick=function(){
+                location.href='/login/open?sk='+encodeURIComponent(x.key)
+                  +'&url='+encodeURIComponent(j.pending.url||'');
+              };
+              document.getElementById('verify-bar').hidden=false;
+              document.getElementById('verify-bar').__shown=true;
+            }
+          });
+      });
+    });
+    chain.then(function(){
+      // 无 pending 时收起横幅
+      if(!list.some(function(x){return true})||!window.__pendingSeen){}
+    });
+  }).catch(function(){});
+}
+function verifyDone(){
+  if(!VERIFY_SK)return;
+  fetch('/login/confirm',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({sk:VERIFY_SK})}).then(function(){
+      document.getElementById('verify-bar').hidden=true;
+      document.getElementById('verify-bar').__shown=false;
+    });
+}
+// 每 2 秒轮询（面板常开时发现验证请求即时弹横幅）
+setInterval(verifyPoll,2000);
+
 document.getElementById('suburl').textContent=location.origin+'/config';
 loadStatus();
 loadParams();
 loadLogins();
+verifyPoll();
 </script>
 </body>
 </html>

@@ -146,6 +146,7 @@ public final class T4Actions {
             base = new LinkedHashMap<>();
             sourceVars.put(sk, base);
         }
+        restoreSourceVars(sk, base);
         Map<String, Object> vars = bookSnap != null ? new MergedVars(bookSnap, base) : base;
         Map<String, Object> ctx = new LinkedHashMap<>();
         ctx.put("source", source);
@@ -352,6 +353,65 @@ public final class T4Actions {
     @SuppressWarnings("unchecked")
     private static Map<String, Object> strMapOf(Object o) {
         return o instanceof Map ? (Map<String, Object>) o : new LinkedHashMap<String, Object>();
+    }
+
+    /** 源级变量池直写（面板登录 token 回传：/login/token → cp_token 等，
+     *  等效书源 JS java.put——play 阶段 makeCtx 的 base 池直接命中）。
+     *  持久化：catvod Cache（宿主 Room）单键 JSON，重启后 makeCtx 初始化时恢复。 */
+    public static void putSourceVar(String sk, String key, String value) {
+        if (sk == null || key == null || key.isEmpty()) return;
+        Map<String, Object> base = sourceVars.get(sk.trim());
+        if (base == null) {
+            base = new LinkedHashMap<>();
+            sourceVars.put(sk.trim(), base);
+        }
+        base.put(key, value == null ? "" : value);
+        persistSourceVars(sk.trim(), base);
+    }
+
+    private static volatile Boolean cacheOk;
+
+    private static boolean cacheAvailable() {
+        if (cacheOk == null) {
+            try {
+                Class.forName("com.github.catvod.utils.Cache");
+                Object m = Class.forName("com.github.catvod.utils.Cache")
+                        .getMethod("getManager").invoke(null);
+                cacheOk = m != null;
+            } catch (Throwable t) {
+                cacheOk = Boolean.FALSE;
+            }
+        }
+        return cacheOk;
+    }
+
+    private static void persistSourceVars(String sk, Map<String, Object> base) {
+        if (!cacheAvailable()) return;
+        try {
+            String json = new com.google.gson.Gson().toJson(base);
+            Class<?> c = Class.forName("com.github.catvod.utils.Cache");
+            c.getMethod("put", String.class, Object.class)
+                    .invoke(null, "legado_vars|" + sk, json);
+        } catch (Throwable ignored) {
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static void restoreSourceVars(String sk, Map<String, Object> base) {
+        if (!cacheAvailable()) return;
+        try {
+            Class<?> c = Class.forName("com.github.catvod.utils.Cache");
+            String json = (String) c.getMethod("getString", String.class, String.class)
+                    .invoke(null, "legado_vars|" + sk, null);
+            if (json == null || json.isEmpty()) return;
+            com.google.gson.JsonObject o = com.google.gson.JsonParser.parseString(json).getAsJsonObject();
+            for (Map.Entry<String, com.google.gson.JsonElement> e : o.entrySet()) {
+                if (!base.containsKey(e.getKey())) {
+                    base.put(e.getKey(), e.getValue().isJsonNull() ? "" : e.getValue().getAsString());
+                }
+            }
+        } catch (Throwable ignored) {
+        }
     }
 
     // ============ home（对齐 t4/index.js#t4Home / parseExploreEntries） ============
@@ -700,8 +760,28 @@ public final class T4Actions {
         try {
             content = fetchPage(ctx, bookUrl);
         } catch (Exception e) {
-            return emptyDetail(e.getMessage());
+            content = null;
         }
+        // 换站源自愈：收藏时的 bookUrl 域名可能已失效（爱丽丝等动态站源）——
+        // 首抓失败/无效时用**当前源 URL 的域名**重写 bookUrl 再试一次
+        // （对齐书源 preUpdateJs 的换域逻辑，只是提前到 BookInfo 阶段做容错）
+        String curHost = currentSourceHost(source, book);
+        System.err.println("[DBG-HEAL] curHost=" + curHost + " bookUrl=" + bookUrl
+                + " contentNull=" + (content == null));
+        if ((content == null || isInvalidBookPage(content)) && curHost != null
+                && bookUrl.contains("://") && !bookUrl.startsWith(curHost)) {
+            String rewritten = bookUrl.replaceFirst("https?://[^/]+", curHost);
+            try {
+                String c2 = fetchPage(ctx, rewritten);
+                if (c2 != null && !isInvalidBookPage(c2)) {
+                    content = c2;
+                    bookUrl = rewritten;
+                    book.put("bookUrl", rewritten);
+                }
+            } catch (Exception ignore) {
+            }
+        }
+        if (content == null) return emptyDetail("抓取失败");
         RuleAnalyzer.Repr contentRepr = RuleAnalyzer.makeContent(content);
 
         // legado ruleBookInfo.init（BookInfo.analyzeBookInfo）：init 规则先执行，
@@ -795,6 +875,51 @@ public final class T4Actions {
         l.add(vod);
         out.put("list", l);
         return out;
+    }
+
+    /** 当前站源域名（对齐书源 GetUL：sourceVariable.sourl 优先；取不到回退
+     *  bookSourceUrl 的域名段。爱丽丝换站源后 sourl 指向可用线路） */
+    private static String currentSourceHost(Map<String, Object> source, Map<String, Object> book) {
+        try {
+            Object bridge = source.get("__bridge__");
+            String var = null;
+            if (bridge instanceof bh.box.plugin.legado.engine.SourceBridge) {
+                var = ((bh.box.plugin.legado.engine.SourceBridge) bridge).jsGetVariable();
+            } else if (bridge instanceof Map) {
+                Object v = ((Map<?, ?>) bridge).get("__bridge__");
+            }
+            if (var != null && !var.isEmpty()) {
+                com.google.gson.JsonObject o = com.google.gson.JsonParser.parseString(var).getAsJsonObject();
+                if (o.has("sourl") && !o.get("sourl").isJsonNull()) {
+                    String sourl = o.get("sourl").getAsString();
+                    String h = hostOf(sourl);
+                    if (h != null) return h;
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        return hostOf(SourceManager.strOrEmpty(SourceManager.mapGet(source, "bookSourceUrl")));
+    }
+
+    private static String hostOf(String url) {
+        java.util.regex.Matcher m = java.util.regex.Pattern
+                .compile("https?://[^/]+").matcher(url);
+        if (!m.find()) return null;
+        String host = m.group();
+        // bookSourceUrl 可能带备注尾巴（爱丽丝："https://www.alicesw.com（自编+修复搜索）"）
+        // ——host 段只保留合法域名部分（协议+域名[:端口]，遇非域名字符截断）
+        java.util.regex.Matcher vm = java.util.regex.Pattern
+                .compile("^https?://[A-Za-z0-9.:-]+").matcher(host);
+        return vm.find() ? vm.group() : null;
+    }
+
+    /** 详情页有效性：空/过短/验证页/404 文案视为无效（换站源重写判定用） */
+    private static boolean isInvalidBookPage(String html) {
+        if (html == null) return true;
+        String t = html.trim();
+        if (t.length() < 500) return true;
+        return t.contains("Checking your browser") || t.contains("404")
+                || t.contains("小说被禁用或已删除");
     }
 
     /** node: get(field) = analyzeStr(content, info[field]||'', ctx).trim()（空规则 → ''） */
@@ -926,6 +1051,21 @@ public final class T4Actions {
             body = fetchPage(ctx, tocUrl);
         } catch (Exception e) {
             Log.w(TAG, "toc page failed: " + e.getMessage());
+        }
+        // 换站源自愈（同 t4Detail）：tocUrl 域名失效 → 当前源域名重写重试
+        if (body.isEmpty() || isInvalidBookPage(body)) {
+            String srcUrl = SourceManager.strOrEmpty(SourceManager.mapGet(source, "bookSourceUrl")).trim();
+            String curHost = hostOf(srcUrl);
+            if (curHost != null && tocUrl.contains("://") && !tocUrl.startsWith(curHost)) {
+                try {
+                    String c2 = fetchPage(ctx, tocUrl.replaceFirst("https?://[^/]+", curHost));
+                    if (c2 != null && !c2.isEmpty() && !isInvalidBookPage(c2)) {
+                        body = c2;
+                        ctx.put("baseUrl", tocUrl.replaceFirst("https?://[^/]+", curHost));
+                    }
+                } catch (Exception ignore) {
+                }
+            }
         }
         if (!body.isEmpty()) {
             RuleAnalyzer.Repr content = parser.parse(tocUrl, body);

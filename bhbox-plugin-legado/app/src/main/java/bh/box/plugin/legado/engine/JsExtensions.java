@@ -915,6 +915,96 @@ public class JsExtensions {
         return Trans.s2t(text);
     }
 
+    /**
+     * 对齐阅读 JsExtensionsCommon#webView(html, url, js)：后台无头 WebView——主线程
+     * 创建 WebView 载入 html/url，delayTime 后 evaluateJavaScript(js) 取返回值
+     * （BackstageWebView 同语义）。长佩 token（sessionStorage）、JS 渲染页抓取依赖。
+     * 插件无 Activity 上下文：用系统 WebView 全局构造（application context 传入的
+     * WebView 需 activity？——实测 application context 可创建，不 attach window 即可）。
+     * 线程模型：JS 引擎线程阻塞 CountDownLatch，主线程 Handler 执行载入+取值。
+     */
+    public String webView(Object html, Object url, Object js) {
+        return webView(html, url, js, 1000L);
+    }
+
+    public String webView(Object html, Object url, Object js, Object delayTime) {
+        final String u = url == null ? "" : String.valueOf(url);
+        final String h = html == null ? "" : String.valueOf(html);
+        final String j = js == null ? "" : String.valueOf(js);
+        final long delay = delayTime instanceof Number ? ((Number) delayTime).longValue() : 1000L;
+        if (u.isEmpty() && h.isEmpty()) return "";
+        final java.util.concurrent.CountDownLatch latch = new java.util.concurrent.CountDownLatch(1);
+        final String[] out = {""};
+        android.os.Handler mh = new android.os.Handler(android.os.Looper.getMainLooper());
+        mh.post(() -> {
+            android.webkit.WebView wv = null;
+            final android.webkit.WebView[] wvSlot = {null};
+            try {
+                wv = new android.webkit.WebView(appContext());
+                wvSlot[0] = wv;
+                android.webkit.WebSettings st = wv.getSettings();
+                st.setJavaScriptEnabled(true);
+                st.setDomStorageEnabled(true);
+                st.setBlockNetworkImage(true);
+                wv.setWebViewClient(new android.webkit.WebViewClient() {
+                    @Override
+                    public void onPageFinished(android.webkit.WebView view, String u2) {
+                        if (j.isEmpty()) {
+                            out[0] = view.getTitle() == null ? "" : view.getTitle();
+                            latch.countDown();
+                            return;
+                        }
+                        view.evaluateJavascript(j, value -> {
+                            String r = value == null ? "" : value;
+                            // evaluateJavascript 返回 JSON 编码字符串（带引号/转义）→ 解一层
+                            if (r.length() >= 2 && r.startsWith("\"") && r.endsWith("\"")) {
+                                try {
+                                    r = new org.json.JSONTokener(r).nextValue().toString();
+                                } catch (Exception ignore) {
+                                }
+                            }
+                            out[0] = "null".equals(r) ? "" : r;
+                            latch.countDown();
+                        });
+                    }
+                });
+                if (h.isEmpty()) {
+                    wv.loadUrl(u);
+                } else {
+                    wv.loadDataWithBaseURL(u.isEmpty() ? "about:blank" : u, h, "text/html", "utf-8", null);
+                }
+                // 超时保护（对齐阅读 timeLimit）：delay+20s 兜底释放
+                mh.postDelayed(() -> latch.countDown(), delay + 20000L);
+            } catch (Throwable t) {
+                Log.w(TAG, "webView failed: " + t.getMessage());
+                latch.countDown();
+            }
+            // 结果取出后销毁（主线程）
+            mh.postDelayed(() -> {
+                try {
+                    if (wvSlot[0] != null) wvSlot[0].destroy();
+                } catch (Throwable ignore) {
+                }
+            }, delay + 21000L);
+        });
+        try {
+            latch.await(30, java.util.concurrent.TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+        return out[0];
+    }
+
+    /** application context（webView 构造用）：宿主启动时经 catvod Init.set 注入，
+     *  Init.context() 是 SDK 标准取口（插件进程内全局可用） */
+    private static android.content.Context appContext() {
+        try {
+            return com.github.catvod.Init.context();
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
     public String startBrowser() {
         return "";
     }
@@ -928,7 +1018,80 @@ public class JsExtensions {
     }
 
     public BrowserResult startBrowserAwait(Object url, Object options) {
-        return new BrowserResult();
+        return startBrowserAwait(url, String.valueOf(options == null ? "" : options), 300000L);
+    }
+
+    /**
+     * 对齐阅读 startBrowserAwait 语义：弹验证 UI → 阻塞等用户完成 → 返回。
+     * 插件无 Activity 通道，等效实现为「面板协作等待」：
+     *  1) 注册验证请求（sk+url，面板轮询 /login/poll 发现后弹出横幅引导用户）；
+     *  2) 用户点面板「打开验证页」→ 宿主 WebView 操作（滑块/登录）；
+     *  3) TOKEN_SHIM 自动回传（/login/token 写入变量池）或用户点「已完成」；
+     *  4) 本方法轮询等待：变量池出现**新 token** 或确认信号 → 解除。
+     * 超时（默认 5 分钟）返回空 html（书源 JS 的 catch/分支自行降级——与阅读
+     * 用户关闭验证窗同效）。不炸规则链，不影响其它请求。
+     */
+    public BrowserResult startBrowserAwait(Object url, Object title, Object timeoutMs) {
+        String u = url == null ? "" : String.valueOf(url);
+        String sk = "";
+        if (bindings != null) {
+            Object skv = bindings.get("sourceKey");
+            if (skv == null) {
+                Object src = bindings.get("source");
+                if (src instanceof Map) {
+                    Object su = ((Map<?, ?>) src).get("bookSourceUrl");
+                    if (su != null) skv = su;
+                }
+            }
+            if (skv != null) sk = String.valueOf(skv).trim();
+        }
+        long timeout = timeoutMs instanceof Number ? ((Number) timeoutMs).longValue() : 300000L;
+        String before = String.valueOf(get("cp_token") != null ? get("cp_token") : "");
+        // 注册验证请求（面板 /login/poll 消费）
+        synchronized (PENDING_VERIFY) {
+            PENDING_VERIFY.clear();
+            LinkedHashMap<String, Object> req = new LinkedHashMap<>();
+            req.put("sk", sk);
+            req.put("url", u);
+            req.put("at", System.currentTimeMillis());
+            PENDING_VERIFY.put(sk, req);
+        }
+        try {
+            long deadline = System.currentTimeMillis() + timeout;
+            while (System.currentTimeMillis() < deadline) {
+                Thread.sleep(1000L);
+                String now = String.valueOf(get("cp_token") != null ? get("cp_token") : "");
+                // token 更新（TOKEN_SHIM 回传 / 面板确认）或确认信号 → 完成
+                if ((!now.isEmpty() && !now.equals(before)) || CONFIRMED.remove(sk)) {
+                    BrowserResult r = new BrowserResult();
+                    r.url = u;
+                    return r;
+                }
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        } finally {
+            synchronized (PENDING_VERIFY) {
+                PENDING_VERIFY.remove(sk);
+            }
+        }
+        return new BrowserResult(); // 超时/中断：空结果（书源 JS 自行降级）
+    }
+
+    /** 待处理验证请求（sk → {sk,url,at}）：面板 /login/poll 读取展示横幅 */
+    public static final Map<String, Object> PENDING_VERIFY =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
+    /** 用户在面板确认完成（remove 返回非 null 即确认信号） */
+    private static final java.util.Set<String> CONFIRMED =
+            java.util.Collections.newSetFromMap(new java.util.concurrent.ConcurrentHashMap<String, Boolean>());
+
+    public static boolean consumeVerifyConfirm(String sk) {
+        return CONFIRMED.remove(sk);
+    }
+
+    public static void markVerifyConfirmed(String sk) {
+        CONFIRMED.add(sk);
     }
 
     /** JS 侧 java.startBrowserAwait(url, opt).html / .url（公开字段，Rhino 属性访问直读） */

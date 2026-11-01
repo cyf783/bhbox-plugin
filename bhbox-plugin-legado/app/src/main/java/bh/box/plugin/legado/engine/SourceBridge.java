@@ -21,11 +21,60 @@ import java.util.Map;
  */
 public class SourceBridge extends ScriptableObject {
 
-    /** 进程级存储：ns|key → 命名空间 Map */
+    /** 进程级存储（Cache 不可用时的兜底）：ns|key → 命名空间 Map */
     private static final Map<String, Map<String, Object>> STORE =
             new LinkedHashMap<>();
 
     private static final int MAX_ENTRIES = 500;
+
+    /** Cache 持久化命名空间前缀（防与宿主其它插件键冲突） */
+    private static final String CACHE_NS = "legado_";
+
+    /** catvod Cache 可用性（宿主 DatabaseTask 启动时 setManager；null=未探测） */
+    private static volatile Boolean cacheOk;
+
+    private static boolean cacheAvailable() {
+        if (cacheOk == null) {
+            try {
+                Class.forName("com.github.catvod.utils.Cache");
+                Object m = Class.forName("com.github.catvod.utils.Cache")
+                        .getMethod("getManager").invoke(null);
+                cacheOk = m != null ? Boolean.TRUE : Boolean.FALSE;
+            } catch (Throwable t) {
+                cacheOk = Boolean.FALSE;
+            }
+        }
+        return cacheOk;
+    }
+
+    /** Cache String 读（异常/未可用 → null） */
+    private static String cacheGetString(String key) {
+        try {
+            Class<?> c = Class.forName("com.github.catvod.utils.Cache");
+            Object v = c.getMethod("getString", String.class, String.class)
+                    .invoke(null, CACHE_NS + key, null);
+            return v == null ? null : String.valueOf(v);
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    /** Cache String 写（异常静默——内存 Map 兜底） */
+    private static void cachePut(String key, String value) {
+        try {
+            Class<?> c = Class.forName("com.github.catvod.utils.Cache");
+            c.getMethod("put", String.class, Object.class).invoke(null, CACHE_NS + key, value);
+        } catch (Throwable ignored) {
+        }
+    }
+
+    private static void cacheDelete(String key) {
+        try {
+            Class<?> c = Class.forName("com.github.catvod.utils.Cache");
+            c.getMethod("delete", String.class).invoke(null, CACHE_NS + key);
+        } catch (Throwable ignored) {
+        }
+    }
 
     private final String key;
     private final Map<String, Object> props;
@@ -113,10 +162,11 @@ public class SourceBridge extends ScriptableObject {
                     return Undefined.instance;
                 });
             case "put":
-                return fn("put", args -> {
-                    String k = args.length >= 1 ? String.valueOf(args[0]) : "";
-                    Object v = args.length >= 2 && args[1] != null ? String.valueOf(args[1]) : "";
+                return fn("put", ARGS0 -> {
+                    String k = ARGS0.length >= 1 ? String.valueOf(ARGS0[0]) : "";
+                    Object v = ARGS0.length >= 2 && ARGS0[1] != null ? String.valueOf(ARGS0[1]) : "";
                     ns("v").put(k, v);
+                    persistNs("v");
                     return v;
                 });
             case "get":
@@ -162,6 +212,22 @@ public class SourceBridge extends ScriptableObject {
             Map<String, Object> m = STORE.get(k);
             if (m == null) {
                 m = new LinkedHashMap<>();
+                // Cache 持久化合并：单键 ns（sourceVariable/loginHeader/userInfo 存
+                // "value" 一键；v 存整 Map JSON）重启后恢复
+                if (cacheAvailable()) {
+                    try {
+                        String saved = cacheGetString(k);
+                        if (saved != null && !saved.isEmpty()) {
+                            Map<?, ?> parsed = parseJsonStringMap(saved);
+                            if (parsed != null) {
+                                for (Map.Entry<?, ?> e2 : parsed.entrySet()) {
+                                    m.put(String.valueOf(e2.getKey()), e2.getValue());
+                                }
+                            }
+                        }
+                    } catch (Throwable ignored) {
+                    }
+                }
                 STORE.put(k, m);
                 if (STORE.size() > MAX_ENTRIES) {
                     String oldest = STORE.keySet().iterator().next();
@@ -170,6 +236,26 @@ public class SourceBridge extends ScriptableObject {
             }
             return m;
         }
+    }
+
+    /** ns 变更后持久化到 Cache（写时双写；JSON 串存单键） */
+    private void persistNs(String namespace) {
+        if (!cacheAvailable()) return;
+        try {
+            Map<String, Object> m = ns(namespace);
+            String json = new com.google.gson.Gson().toJson(m);
+            cachePut(namespace + "|" + getKey(), json);
+        } catch (Throwable ignored) {
+        }
+    }
+
+    private static Map<?, ?> parseJsonStringMap(String json) {
+        try {
+            com.google.gson.JsonElement el = com.google.gson.JsonParser.parseString(json);
+            if (el.isJsonObject()) return new com.google.gson.Gson().fromJson(el, Map.class);
+        } catch (Throwable ignored) {
+        }
+        return null;
     }
 
     private String str(Map<String, Object> m) {
@@ -206,9 +292,22 @@ public class SourceBridge extends ScriptableObject {
         return true;
     }
 
+    /** Java 侧源级保存数据直写（legado BaseSource.put 等价，面板/宿主用） */
+    public void putSaved(String k, Object v) {
+        ns("v").put(String.valueOf(k), v == null ? "" : String.valueOf(v));
+        persistNs("v");
+    }
+
+    /** Java 侧源级保存数据直读 */
+    public String getSaved(String k) {
+        Object v = ns("v").get(String.valueOf(k));
+        return v != null ? String.valueOf(v) : "";
+    }
+
     /** Java 侧变量直写（宿主/harness 用；JS 侧走 methodOf("setVariable")） */
     public void jsSetVariable(String json) {
         ns("sourceVariable").put("value", json == null ? "" : json);
+        persistNs("sourceVariable");
     }
 
     /** Java 侧变量直读 */
