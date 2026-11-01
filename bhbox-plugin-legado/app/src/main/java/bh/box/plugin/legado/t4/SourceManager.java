@@ -151,6 +151,10 @@ public final class SourceManager {
     /** 对齐 sources.js#isIncompatible：规则字段是否依赖 WebView，返回命中的 marker（无则 null） */
     public static String isIncompatible(Map<String, Object> src) {
         for (String key : RULE_KEYS) {
+            // ruleContent.content 例外：其 WebView 调用多为带 catch 的降级路径（登录态/
+            // 滑块验证，主路径 token 缓存不经过）——由 loadSources 单独判定降级收录，
+            // 不作为整源拒载依据（长佩文学型误杀）
+            if ("ruleContent".equals(key)) continue;
             Object v = src.get(key);
             if (v == null) continue;
             String text = (v instanceof String) ? (String) v : GSON.toJson(v);
@@ -168,6 +172,12 @@ public final class SourceManager {
         public final List<Map<String, Object>> errors = new ArrayList<>();
         public final List<Map<String, Object>> skipped = new ArrayList<>();
         public final List<Map<String, Object>> incompatible = new ArrayList<>();
+        /** ruleContent 含 WebView 调用但已收录的源（降级运行：登录/滑块分支不可用） */
+        public final List<Map<String, Object>> degraded = new ArrayList<>();
+
+        public void reportExtraDegraded(String name, String marker) {
+            degraded.add(rec("name", name, "reason", "正文降级:WebView:" + marker));
+        }
 
         /** report 对象（/status 与 /reload 响应体用，键序对齐 node） */
         public Map<String, Object> reportMap() {
@@ -176,6 +186,7 @@ public final class SourceManager {
             r.put("errors", errors);
             r.put("skipped", skipped);
             r.put("incompatible", incompatible);
+            r.put("degraded", degraded);
             return r;
         }
     }
@@ -228,7 +239,28 @@ public final class SourceManager {
             }
             String marker = isIncompatible(src);
             if (marker != null) {
-                report.incompatible.add(rec("name", name, "reason", "依赖WebView:" + marker));
+                // ruleContent 的 WebView 调用（webView/startBrowserAwait）多为**带 catch 的
+                // 降级路径**（登录态/滑块验证），主路径（token 缓存）不经过——只记报告不拒载
+                //（长佩文学型：正文 JS try{java.startBrowserAwait(...)}catch(e){} 优雅降级）。
+                // searchUrl/exploreUrl/jsLib/ruleXxx（除 content）命中仍拒载——解析主链依赖。
+                Object ruleContentObj = mapGet(src, "ruleContent");
+                String otherMarker = null;
+                for (String key : RULE_KEYS) {
+                    if ("ruleContent".equals(key)) continue;
+                    Object v = src.get(key);
+                    if (v == null) continue;
+                    String t = (v instanceof String) ? (String) v : GSON.toJson(v);
+                    for (String m : INCOMPATIBLE_MARKERS) {
+                        if (t.contains(m)) { otherMarker = m; break; }
+                    }
+                    if (otherMarker != null) break;
+                }
+                if (otherMarker != null) {
+                    report.incompatible.add(rec("name", name, "reason", "依赖WebView:" + otherMarker));
+                    continue;
+                }
+                report.reportExtraDegraded(name, marker);
+                report.list.add(src);
                 continue;
             }
             report.list.add(src);

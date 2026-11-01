@@ -903,7 +903,7 @@ public final class T4Actions {
         class NextFinder {
             List<String> of(String pageUrl, RuleAnalyzer.Repr content) {
                 Object nextRule = rule.get("nextTocUrl");
-                if (nextRule == null) return new ArrayList<>();
+                if (nextRule == null || String.valueOf(nextRule).trim().isEmpty()) return new ArrayList<>();
                 try {
                     JsExtensions java = (JsExtensions) ctx.get("java");
                     List<String> out = new ArrayList<>();
@@ -1122,7 +1122,7 @@ public final class T4Actions {
         class NextFinder {
             List<String> of(String pageUrl, RuleAnalyzer.Repr content) {
                 Object nextRule = rule.get("nextContentUrl");
-                if (nextRule == null) return new ArrayList<>();
+                if (nextRule == null || String.valueOf(nextRule).trim().isEmpty()) return new ArrayList<>();
                 try {
                     JsExtensions java = (JsExtensions) ctx.get("java");
                     List<String> out = new ArrayList<>();

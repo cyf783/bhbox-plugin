@@ -114,6 +114,23 @@ text-overflow:ellipsis;white-space:nowrap}
     <ul class="plist" id="plist"></ul>
   </section>
 
+  <section class="card" id="login-card" hidden><h2>书源登录 / 源变量<span class="cnt" id="lg-cnt">-</span></h2>
+    <p class="hint">URL 型登录源可直接打开登录页；自定义变量（站源切换等）在此填写保存，等效阅读 App 的源变量面板。</p>
+    <input class="search" id="lg-q" type="search" placeholder="搜索源名称…" oninput="lgFilt(this.value)">
+    <ul class="srcs" id="lg-list"></ul>
+    <div id="lg-editor" hidden>
+      <p class="hint" id="lg-title" style="font-weight:600;color:var(--ink);margin-top:10px"></p>
+      <p class="hint" id="lg-url" hidden>登录地址：<a id="lg-link" href="#" target="_blank" style="color:var(--acc)">打开登录页</a>（在网页里登录后，本站 Cookie/登录态留存于应用 WebView）</p>
+      <textarea class="ptext" id="lg-var" rows="5" placeholder="源变量 JSON（如 {"sourl":"https://…"}），留空清除"></textarea>
+      <div class="btns">
+        <button class="btn pri" type="button" onclick="lgSave(this)">保存变量</button>
+        <button class="btn ghost" type="button" onclick="lgClose()">关闭</button>
+      </div>
+      <p class="hint note" id="lg-st" hidden></p>
+    </div>
+    <p class="empty" id="lg-empty" hidden>暂无支持登录/变量的书源。</p>
+  </section>
+
   <section class="card"><h2>书源列表<span class="cnt" id="cnt">-</span></h2>
     <input class="search" id="q" type="search" placeholder="搜索名称或分组…" oninput="filt(this.value)">
     <ul class="srcs" id="srcs"></ul>
@@ -251,9 +268,77 @@ function doSaveParams(b){
     .catch(function(){b.disabled=false;b.textContent='保存失败，点此重试'});
 }
 
+// ===== 书源登录 / 源变量 =====
+var LG_CUR=null;
+function lgEsc(s){return esc(s)}
+function loadLogins(){
+  fetch('/logins').then(function(r){return r.json()}).then(function(d){
+    var list=d.logins||[];
+    var card=document.getElementById('login-card');
+    card.hidden=list.length===0;
+    if(list.length===0)return;
+    document.getElementById('lg-cnt').textContent=list.length;
+    var html='';
+    list.forEach(function(x,i){
+      var tag=x.loginUrl?'<button class="btn ghost" style="padding:4px 12px;font-size:12px" onclick="lgOpen(\''+lgEsc(x.key)+'\')">打开登录页</button>'
+             :(x.loginJs?'<span class="g">JS登录面板</span>':'');
+      html+='<li data-k="'+lgEsc((x.name).toLowerCase())+'" data-i="'+i+'">'
+        +'<span class="n" style="cursor:pointer" onclick="lgEdit(\''+lgEsc(x.key)+'\',\''+lgEsc(x.name)+'\')">'+lgEsc(x.name)+'</span>'
+        +'<span class="g">'+tag
+        +'<a href="#" style="color:var(--acc);font-size:12px;margin-left:8px" onclick="lgEdit(\''+lgEsc(x.key)+'\',\''+lgEsc(x.name)+'\');return false">变量</a></span></li>';
+    });
+    document.getElementById('lg-list').innerHTML=html;
+    window.__lgdata=list;
+    document.getElementById('lg-empty').hidden=list.length>0;
+  }).catch(function(){});
+}
+function lgFilt(v){
+  v=v.trim().toLowerCase();
+  var lis=document.getElementById('lg-list').children,n=0;
+  for(var i=0;i<lis.length;i++){
+    var hit=lis[i].getAttribute('data-k').indexOf(v)>=0;
+    lis[i].style.display=hit?'':'none';if(hit)n++;
+  }
+  document.getElementById('lg-cnt').textContent=n;
+}
+function lgFind(key){var l=window.__lgdata||[];
+  for(var i=0;i<l.length;i++)if(l[i].key===key)return l[i];return null}
+function lgEdit(key,name){
+  var x=lgFind(key);LG_CUR={key:key,name:name,loginUrl:x?x.loginUrl:''};
+  document.getElementById('lg-editor').hidden=false;
+  document.getElementById('lg-title').textContent='源变量 — '+name;
+  var u=document.getElementById('lg-url');
+  if(x&&x.loginUrl){u.hidden=false;document.getElementById('lg-link').href=x.loginUrl;}
+  else u.hidden=true;
+  var st=document.getElementById('lg-st');st.hidden=true;
+  fetch('/login/get?sk='+encodeURIComponent(key)).then(function(r){return r.json()})
+    .then(function(j){document.getElementById('lg-var').value=j.variable||''})
+    .catch(function(){document.getElementById('lg-var').value=''});
+  document.getElementById('lg-editor').scrollIntoView({behavior:'smooth',block:'nearest'});
+}
+function lgClose(){document.getElementById('lg-editor').hidden=true;LG_CUR=null}
+function lgOpen(key){
+  var x=lgFind(key);
+  if(x&&x.loginUrl)window.open(x.loginUrl,'_blank');
+}
+function lgSave(b){
+  if(!LG_CUR||b.disabled)return;b.disabled=true;b.textContent='保存中…';
+  var st=document.getElementById('lg-st');
+  var payload=JSON.stringify({sk:LG_CUR.key,variable:document.getElementById('lg-var').value});
+  fetch('/login/set',{method:'POST',headers:{'Content-Type':'text/plain'},
+    body:btoa(unescape(encodeURIComponent(payload)))})
+    .then(function(r){return r.json()}).then(function(j){
+      b.disabled=false;b.textContent='保存变量';st.hidden=false;
+      if(!j.ok){st.classList.add('warn');st.textContent='保存失败：'+(j.error||'未知错误');return}
+      st.classList.remove('warn');st.textContent='已保存，重载书源后生效（下一请求即读取新值）。';
+    })
+    .catch(function(){b.disabled=false;b.textContent='保存失败，点此重试'});
+}
+
 document.getElementById('suburl').textContent=location.origin+'/config';
 loadStatus();
 loadParams();
+loadLogins();
 </script>
 </body>
 </html>

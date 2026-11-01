@@ -185,9 +185,19 @@ public final class TemplateRenderer {
                 if (sv != null) return sv;
             }
             // 未命中 → JS 沙箱（jsLib 名字命中；真未定义名抛 ReferenceError，由 render 捕获置空）
-            return JsEngine.eval(prependJsLib(expr, bindings), bindings);
+            return JsEngine.eval(prependJsLib(expr, bindings), withJavaBridge(bindings));
         }
-        return JsEngine.eval(prependJsLib(expr, bindings), bindings);
+        return JsEngine.eval(prependJsLib(expr, bindings), withJavaBridge(bindings));
+    }
+
+    /** bindings 无 java 桥时注入（长佩 searchUrl 的 {{java.put("key",key);key}} 依赖——
+     *  URL 构建段的模板表达式不在 buildJsBindings/buildRenderBindings 链上） */
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> withJavaBridge(Map<String, Object> bindings) {
+        if (bindings != null && !(bindings.get("java") instanceof JsExtensions)) {
+            bindings.put("java", new JsExtensions(bindings));
+        }
+        return bindings;
     }
 
     /**

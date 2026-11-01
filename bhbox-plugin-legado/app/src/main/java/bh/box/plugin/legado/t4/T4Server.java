@@ -11,6 +11,7 @@ import com.google.gson.JsonObject;
 import java.io.IOException;
 import java.net.URLDecoder;
 import java.text.SimpleDateFormat;
+import java.util.ArrayList;
 import java.util.Date;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -211,6 +212,15 @@ public final class T4Server extends NanoHTTPD {
             if (method == Method.POST && "/params".equals(uri)) {
                 return handlePostParams(session);
             }
+            if (method == Method.GET && "/logins".equals(uri)) {
+                return handleLogins();
+            }
+            if (method == Method.GET && "/login/get".equals(uri)) {
+                return handleLoginGet(queryParams(session));
+            }
+            if (method == Method.POST && "/login/set".equals(uri)) {
+                return handleLoginSet(session);
+            }
             if (method == Method.GET && uri.startsWith("/api/")) {
                 awaitSources();
                 return handleApi(uri.substring("/api/".length()), queryParams(session));
@@ -223,6 +233,83 @@ public final class T4Server extends NanoHTTPD {
             Log.e(TAG, "request failed: " + method + " " + uri + ": " + e.getMessage());
             return json(Response.Status.INTERNAL_ERROR, kv("error", String.valueOf(e.getMessage())));
         }
+    }
+
+    // ============ 书源登录 / 源变量（index.html 登录面板；对齐阅读 BaseSource 变量面） ============
+
+    /** GET /logins：各源登录形态摘要——loginUrl（URL 型直接可打开）与 JS 型标记 */
+    private Response handleLogins() {
+        if (LegadoPlugin.syncIfChanged()) reloadWithParams();
+        List<Object> out = new ArrayList<>();
+        for (Map<String, Object> src : state.list) {
+            String url = SourceManager.strOrEmpty(SourceManager.mapGet(src, "bookSourceUrl")).trim();
+            Object loginUrl = SourceManager.mapGet(src, "loginUrl");
+            LinkedHashMap<String, Object> item = new LinkedHashMap<>();
+            item.put("key", url);
+            item.put("name", SourceManager.strOrEmpty(SourceManager.mapGet(src, "bookSourceName")));
+            item.put("hasVar", true); // 源变量面板对所有源开放（站源切换/自定义变量）
+            if (loginUrl instanceof String) {
+                String lu = ((String) loginUrl).trim();
+                // URL 型（http 开头，非 JS）→ 可直接打开；JS 型（function/var/@js/<js>）→ 仅标记
+                boolean isUrl = lu.startsWith("http://") || lu.startsWith("https://");
+                item.put("loginUrl", isUrl ? lu : "");
+                item.put("loginJs", !isUrl && !lu.isEmpty());
+            } else {
+                item.put("loginUrl", "");
+                item.put("loginJs", false);
+            }
+            out.add(item);
+        }
+        return json(Response.Status.OK, kv("logins", out));
+    }
+
+    /** GET /login/get?sk=：读源级变量（SourceBridge.jsGetVariable；持久于进程内存） */
+    private Response handleLoginGet(Map<String, String> query) {
+        String sk = query.get("sk");
+        if (sk == null || sk.trim().isEmpty())
+            return json(Response.Status.BAD_REQUEST, kv("error", "missing sk"));
+        bh.box.plugin.legado.engine.SourceBridge sb = bridgeOf(sk);
+        return json(Response.Status.OK, kv("sk", sk, "variable", sb.jsGetVariable()));
+    }
+
+    /** POST /login/set：写源级变量 {sk, variable}（base64 body，同 /params 形态） */
+    private Response handleLoginSet(IHTTPSession session) throws IOException, ResponseException {
+        Map<String, String> files = new LinkedHashMap<>();
+        session.parseBody(files);
+        String raw = files.get("postData");
+        if (raw == null || raw.trim().isEmpty())
+            return json(Response.Status.BAD_REQUEST, kv("error", "empty body"));
+        byte[] bytes;
+        try {
+            bytes = android.util.Base64.decode(raw.trim(), android.util.Base64.DEFAULT);
+        } catch (IllegalArgumentException e) {
+            return json(Response.Status.BAD_REQUEST, kv("error", "invalid base64 body"));
+        }
+        JsonObject in = GSON.fromJson(new String(bytes, java.nio.charset.StandardCharsets.UTF_8), JsonObject.class);
+        String sk = in != null && in.has("sk") && !in.get("sk").isJsonNull() ? in.get("sk").getAsString() : null;
+        String variable = in != null && in.has("variable") && !in.get("variable").isJsonNull()
+                ? in.get("variable").getAsString() : "";
+        if (sk == null || sk.trim().isEmpty())
+            return json(Response.Status.BAD_REQUEST, kv("error", "missing sk"));
+        bridgeOf(sk).jsSetVariable(variable);
+        return json(Response.Status.OK, kv("ok", true, "sk", sk));
+    }
+
+    /** 源 key → SourceBridge（properties 取该源 Map，桥复用 __bridge__ 与 JS 侧同实例） */
+    private bh.box.plugin.legado.engine.SourceBridge bridgeOf(String sk) {
+        for (Map<String, Object> src : state.list) {
+            String url = SourceManager.strOrEmpty(SourceManager.mapGet(src, "bookSourceUrl")).trim();
+            if (url.equals(sk)) {
+                Object bridge = src.get("__bridge__");
+                if (bridge instanceof bh.box.plugin.legado.engine.SourceBridge) {
+                    return (bh.box.plugin.legado.engine.SourceBridge) bridge;
+                }
+                bh.box.plugin.legado.engine.SourceBridge sb = new bh.box.plugin.legado.engine.SourceBridge(sk, src);
+                src.put("__bridge__", sb);
+                return sb;
+            }
+        }
+        return new bh.box.plugin.legado.engine.SourceBridge(sk, new LinkedHashMap<String, Object>());
     }
 
     /** 对齐 index.js#handleApi：hash → 书源，五动作分发（home/list/detail/search/play） */
