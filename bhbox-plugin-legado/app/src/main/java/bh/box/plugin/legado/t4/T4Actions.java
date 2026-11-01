@@ -56,7 +56,9 @@ public final class T4Actions {
             Collections.synchronizedMap(new LinkedHashMap<String, Object[]>());
     private static final long TOC_TTL = 30 * 60 * 1000L;
     private static final int MAX_TOC_CACHE = 200;     // 目录缓存上限（千章大对象防内存膨胀，超限删最早）
-    private static final int MAX_TOC_PAGES = 20;      // nextTocUrl 翻页上限（防死循环）
+    private static final int MAX_TOC_PAGES = 300;     // nextTocUrl 翻页上限：阅读 App 无上限仅 visited 防环，
+                                                      // 此处保留护栏防坏源死循环（300 页×50 章=1.5 万章，
+                                                      // 覆盖全部真实书籍；20 页时本源 5360 章只出 1570）
     private static final int MAX_CONTENT_PAGES = 10;  // nextContentUrl 翻页上限
 
     /** 源级持久变量池（legado variables 语义：java.put/get 与 @put/@get 跨请求共享，

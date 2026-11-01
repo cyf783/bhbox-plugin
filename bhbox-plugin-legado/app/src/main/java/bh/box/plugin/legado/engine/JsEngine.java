@@ -179,6 +179,10 @@ public final class JsEngine {
         }
         if (v instanceof Number) return numToString(((Number) v).doubleValue());
         if (v instanceof Boolean) return String.valueOf(v);
+        // Java 集合原样透传（unwrap 后的 LiveConnect 产物——书源 JS 返回
+        // Packages.java.util.ArrayList 场景）：元素保持原始形态（jsoup Element 等条目
+        // 供 list 模式逐条 wrapItem；此前落 String.valueOf 串成单条目致字段全串）
+        if (v instanceof List) return v;
         return String.valueOf(v);
     }
 

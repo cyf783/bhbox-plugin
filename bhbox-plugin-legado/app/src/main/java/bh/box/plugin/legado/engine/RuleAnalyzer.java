@@ -23,6 +23,7 @@ import org.mozilla.javascript.NativeObject;
 import org.mozilla.javascript.Scriptable;
 import org.mozilla.javascript.ScriptableObject;
 import org.mozilla.javascript.Undefined;
+import org.mozilla.javascript.Wrapper;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -583,14 +584,24 @@ public final class RuleAnalyzer {
         return parsed != null ? parsed : arrayOrSplit(result);
     }
 
-    /** Rhino NativeArray → java List（list 模式 JS 段数组输出保留条目形态；非数组返回 null） */
+    /** Rhino 容器 → java List（list 模式 JS 段数组输出保留条目形态；非数组返回 null）。
+     *  NativeArray：JS 字面量数组；NativeJavaObject：书源 JS 直接返回 Java 集合
+     *  （Packages.java.util.ArrayList / asList 产物——「手机小说」chapterList 写法，
+     *  LiveConnect 包装，须 unwrap 后按 List 展开，否则整包落成单条目致字段全串）。 */
     private static List<Object> scriptableToList(Object v) {
-        if (!(v instanceof NativeArray)) return null;
-        NativeArray arr = (NativeArray) v;
-        int len = (int) arr.getLength();
-        List<Object> out = new ArrayList<>(len);
-        for (int i = 0; i < len; i++) out.add(arr.get(i, arr));
-        return out;
+        if (v instanceof NativeArray) {
+            NativeArray arr = (NativeArray) v;
+            int len = (int) arr.getLength();
+            List<Object> out = new ArrayList<>(len);
+            for (int i = 0; i < len; i++) out.add(arr.get(i, arr));
+            return out;
+        }
+        if (v instanceof Wrapper) {
+            Object u = ((Wrapper) v).unwrap();
+            if (u instanceof List) return new ArrayList<Object>((List<?>) u);
+        }
+        if (v instanceof List) return new ArrayList<Object>((List<?>) v);
+        return null;
     }
 
     /** 对齐 template.js#runJs 的 jsLib 共享作用域：源 jsLib 前置拼接（等价 vm 共享全局） */
@@ -1228,13 +1239,22 @@ public final class RuleAnalyzer {
     }
 
     /**
-     * JS result 首段绑定形态（对齐 node analyzer.js#makeElementResult）：
-     * json 内容绑对象树（Map/List/String——JsEngine toJsValue 转 NativeObject/NativeArray），
-     * 其余绑字符串。
+     * JS result 首段绑定形态（对齐阅读 AnalyzeRuleCore.evalJS 的 result 语义）：
+     * json 绑对象树（Map/List/String——JsEngine toJsValue 转 NativeObject/NativeArray）；
+     * html 绑 jsoup Element 本体（LiveConnect 暴露 select/text/attr 方法面，社区源 @js
+     * 字段规则主流写法 result.select(...).first() 可用——「手机小说」源全部字段规则依赖）；
+     * 其余绑可读文本。
+     * 原 node 行为 html 绑 outerHtml 字符串：与本源 result.select 全空 → 标题空 →
+     * bookUrl 回退 baseUrl 事件冲突。String(result) 协议由 LiveConnect 调
+     * Element.toString()=outerHtml 等价承接；裸 result.match（node 专有）与阅读 App
+     * 一致不支持。
      */
     private static Object jsResultOf(Repr content) {
         if ("json".equals(content.kind) && content.data != null) {
             return jsonToJava(content.data);
+        }
+        if ("html".equals(content.kind) && content.root != null) {
+            return content.root;
         }
         return jsValueToString(content);
     }

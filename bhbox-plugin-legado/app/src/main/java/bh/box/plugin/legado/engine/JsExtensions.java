@@ -513,6 +513,10 @@ public class JsExtensions {
     /** repr → 字符串：{kind:'text',text} 取 text；有 raw 取 raw；其余 String 化 */
     private static String reprToString(Object repr) {
         if (repr == null) return "";
+        if (repr instanceof RuleAnalyzer.Repr) {
+            // Java 版 repr（evalRuleList 条目）：走引擎统一取文本（getResult=可读文本）
+            return RuleAnalyzer.jsValueToString(repr);
+        }
         if (repr instanceof Map) {
             Map<?, ?> m = (Map<?, ?>) repr;
             if ("text".equals(m.get("kind")) && m.get("text") != null) return String.valueOf(m.get("text"));
