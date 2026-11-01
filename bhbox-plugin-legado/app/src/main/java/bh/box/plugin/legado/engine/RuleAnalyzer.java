@@ -285,6 +285,36 @@ public final class RuleAnalyzer {
     }
 
     private static Object dispatch(Repr content, String rule, Map<String, Object> ctx, boolean list, boolean isUrl) {
+        // 0) @put 尾缀（对齐阅读 AnalyzeRuleCore：splitSourceRule 先剥离 @put，putRule 在
+        // 每段求值**前**用整页内容 getString(子规则) 写池——不依赖 JS 段成功；爱丽丝 init
+        // 尾 "src;" ReferenceError 曾致后续 @put 全丢 → 目录 tocUrl 取空）
+        int putIdx;
+        while ((putIdx = rule.indexOf("@put:{")) >= 0) {
+            int open = putIdx + 5;
+            int close = matchBrace(rule, open);
+            if (close <= 0) break;
+            String putJson = rule.substring(open + 1, close);
+            // @put:{...} 为 JSON Map（key→子规则字符串；值含 ':'——p.2:-2 索引选择器，
+            // 不能按首 ':' 切）
+            Map<?, ?> putMap = parseJsonStringMap("{" + putJson + "}");
+            if (putMap != null) {
+                for (Map.Entry<?, ?> e : putMap.entrySet()) {
+                    String key = String.valueOf(e.getKey());
+                    Object subRule = e.getValue();
+                    if (key.isEmpty() || subRule == null) continue;
+                    Object sub = dispatch(content, String.valueOf(subRule), ctx, false, false);
+                    if ("m".equals(key)) {
+                        try {
+                            Object v = dispatch(content, String.valueOf(subRule), ctx, false, false);
+                        } catch (Throwable t) {
+                        }
+                    }
+                    Map<String, Object> vars = varsOf(ctx, true);
+                    if (vars != null) vars.put(key, jsValueToString(sub));
+                }
+            }
+            rule = rule.substring(0, putIdx) + rule.substring(close + 1);
+        }
         // 1) JS 混排（<js> 段或 @js: 前缀，legado JS_PATTERN 分段语义）
         if (JS_RULE.matcher(rule).find()) {
             return runJsRule(content, rule, ctx, list, isUrl);
@@ -340,26 +370,20 @@ public final class RuleAnalyzer {
             mm.appendTail(sb);
             return sb.toString();
         }
-        // @put 尾缀（AnalyzeRule put 变量）：rule@put:{key:subrule}——子规则求值写入变量池后剥离尾缀
-        // 对齐 legado AnalyzeRule#splitPutRule：剥离规则中所有 @put:{...}（原 node 行为: 仅首个）
-        int putIdx;
-        while ((putIdx = rule.indexOf("@put:{")) >= 0) {
-            int open = putIdx + 5;
-            int close = matchBrace(rule, open);
-            if (close <= 0) break;
-            String inner = rule.substring(open + 1, close);
-            int sep = inner.indexOf(':');
-            String key = sep > 0 ? inner.substring(0, sep).trim() : "";
-            if (!key.isEmpty()) {
-                Object sub = dispatch(content, inner.substring(sep + 1).trim(), ctx, false, false);
-                Map<String, Object> vars = varsOf(ctx, true);
-                if (vars != null) vars.put(key, jsValueToString(sub));
-            }
-            rule = rule.substring(0, putIdx) + rule.substring(close + 1);
-        }
-        // @get:{key} 变量引用：替换为变量池值（缺失置空）
+        // @get:{key} 变量引用：替换为变量池值（缺失置空）。替换结果为纯取值文本时按
+        // 字面量返回——对齐阅读 SourceRule init 的 evalPattern 命中语义（makeUpRule 后
+        // 直接返回组合串、不再方言解析；爱丽丝 tocUrl "@get:{m}\n@js:..." 的 @get 段
+        // 替换值 "/other/chapters/id/x.html" 曾被当 CSS 选择器解析 → 空 → tocUrl 退化
+        // 为站源根 → 目录 0 章）
         if (rule.contains("@get:{")) {
-            rule = replaceGetVars(rule, ctx);
+            String replaced = replaceGetVars(rule, ctx);
+            if (!replaced.equals(rule) && !replaced.contains("@get:{")
+                    && !replaced.contains("{{") && !replaced.contains("@put:{")
+                    && !URL_CONST.matcher(replaced).find()
+                    && !replaced.startsWith("@") && !replaced.startsWith(":")) {
+                return replaced;
+            }
+            rule = replaced;
         }
         // URL 常量规则原样返回（legado analyzeUrl 分流）；含 {{}} 或 {$. 内嵌模板的不直通
         if (URL_CONST.matcher(rule).find() && !rule.contains("{{") && !rule.contains("{$.")) {
@@ -553,7 +577,16 @@ public final class RuleAnalyzer {
                 // （result=段输入，先于 JS 执行）；原 node 行为: JS 执行后才以输出为 result 求值
                 preEvalReplaces(split.replaces, jsValueToString(result), ctx);
                 Map<String, Object> bindings = buildJsBindings(ctx, result, content);
-                Object out = JsEngine.eval(prependJsLib(pre, ctx), bindings);
+                Object out;
+                try {
+                    out = JsEngine.eval(prependJsLib(pre, ctx), bindings);
+                } catch (Exception e) {
+                    // 对齐阅读 AnalyzeRuleCore：JS 段失败该段结果置空、后续段继续
+                    // （爱丽丝 init 尾 "src;" 引用未定义变量抛 ReferenceError，
+                    // 若整链中断则后续 @put 变量全部丢失 → 目录取空）
+                    Log.w(TAG, "js seg failed: " + truncate(e.getMessage(), 80));
+                    out = null;
+                }
                 lastOut = out;
                 if (split.replaces.isEmpty()) {
                     // 对齐 legado AnalyzeRule#getString：JS 输出无 ## 时原样链式传递，
@@ -606,11 +639,27 @@ public final class RuleAnalyzer {
 
     /** 对齐 template.js#runJs 的 jsLib 共享作用域：源 jsLib 前置拼接（等价 vm 共享全局） */
     private static String prependJsLib(String code, Map<String, Object> ctx) {
-        Object lib = mapGet(ctx.get("source"), "jsLib");
-        if (lib instanceof String && !((String) lib).trim().isEmpty()) {
-            return lib + "\n;\n" + code;
+        return jsLibOf(ctx) == null ? code : jsLibOf(ctx) + "\n;\n" + code;
+    }
+
+    /** 源 jsLib 提取（source 桥/裸 Map 两态；无 → null） */
+    public static String jsLibOf(Map<String, Object> ctx) {
+        Object src = ctx.get("source");
+        Object lib = null;
+        if (src instanceof SourceBridge) {
+            lib = ((SourceBridge) src).getProperty("jsLib");
+        } else if (src instanceof Map) {
+            lib = ((Map<?, ?>) src).get("jsLib");
         }
-        return code;
+        if (lib instanceof String && !((String) lib).trim().isEmpty()) {
+            return (String) lib;
+        }
+        return null;
+    }
+
+    /** 公开 jsLib 前置（T4Actions preUpdateJs 等宿主侧调用） */
+    public static String prependJsLibPub(String code, Map<String, Object> ctx) {
+        return prependJsLib(code, ctx);
     }
 
     /** 对齐 analyzer.js#splitSourceRuleJs：JS_PATTERN 分段 */
@@ -703,6 +752,18 @@ public final class RuleAnalyzer {
      * ## 拆分：[rule, match, replace, first?]（legado：第 4 段存在 → 只取首个匹配替换；规则段 trim）。
      * 首个 ## 需顶层平衡感知（{{}}/引号/[]() 内不拆）；净化段内 ## 按朴素拆（同 legado）。
      */
+    /** @put JSON Map 解析（对齐 legado KS_JSON 严格→宽松双栈；失败返回 null） */
+    private static Map<?, ?> parseJsonStringMap(String json) {
+        try {
+            JsonElement el = JsonParser.parseString(json);
+            if (el.isJsonObject()) {
+                return GSON.fromJson(el, Map.class);
+            }
+        } catch (Exception ignore) {
+        }
+        return null;
+    }
+
     private static Replace splitReplace(String rule) {
         Replace r = new Replace();
         int idx = topIndexOf(rule, "##");
@@ -1072,15 +1133,28 @@ public final class RuleAnalyzer {
         b.put("page", pg != null ? pg : Integer.valueOf(1));
         b.put("searchPage", pg != null ? pg : Integer.valueOf(1));
         Map<String, Object> source = mapOrEmpty(ctx.get("source"));
-        b.putIfAbsent("source", source);
-        b.putIfAbsent("book", mapOrEmpty(ctx.get("book")));
+        Map<String, Object> bookObjR = mapOrEmpty(ctx.get("book"));
+        Object srcBridgeR = source.get("__bridge__");
+        if (!(srcBridgeR instanceof SourceBridge)) {
+            Object skR = mapGet(source, "bookSourceUrl");
+            srcBridgeR = new SourceBridge(skR != null ? String.valueOf(skR).trim() : "", source);
+            source.put("__bridge__", srcBridgeR);
+        }
+        Object bookBridgeR = bookObjR.get("__bridge__");
+        if (!(bookBridgeR instanceof BookBridge)) {
+            bookBridgeR = new BookBridge(bookObjR);
+            bookObjR.put("__bridge__", bookBridgeR);
+        }
+        b.put("source", srcBridgeR);  // 覆盖 ctx 复制带入的裸 Map
+        b.put("book", bookBridgeR);
         b.putIfAbsent("baseUrl", defaultStr(ctx.get("baseUrl"), mapGet(source, "bookSourceUrl")));
         b.putIfAbsent("chapter", mapOrEmpty(ctx.get("chapter")));
         b.putIfAbsent("key", defaultStr(ctx.get("key"), null));
         b.putIfAbsent("searchKey", defaultStr(ctx.get("key"), null));
         b.putIfAbsent("result", defaultStr(ctx.get("result"), null));
         // node evalExpr：src → ctx.result ?? ''
-        b.putIfAbsent("src", defaultStr(ctx.get("result"), null));
+        Object srcBind = defaultStr(ctx.get("result"), null);
+        if (srcBind != null) b.put("src", srcBind);
         return b;
     }
 
@@ -1097,13 +1171,29 @@ public final class RuleAnalyzer {
         b.put("result", resultBinding);
         b.put("root", rootContent);
         Map<String, Object> source = mapOrEmpty(ctx.get("source"));
-        b.putIfAbsent("source", source);
-        b.putIfAbsent("book", mapOrEmpty(ctx.get("book")));
+        // source/book 桥：Map 形态无方法面（source.getVariable()/book.putCustomVariable() 等
+        // 阅读 BaseSource/Book API 社区源高频），包桥对象注入（属性经 NativeObject 透传可探测，
+        // 方法直调桥实现；SourceBridge.get(k) 保留属性访问兼容）
+        Object srcBridge = source.get("__bridge__");
+        if (!(srcBridge instanceof SourceBridge)) {
+            Object sk = mapGet(source, "bookSourceUrl");
+            srcBridge = new SourceBridge(sk != null ? String.valueOf(sk).trim() : "", source);
+            source.put("__bridge__", srcBridge);
+        }
+        Map<String, Object> bookObj = mapOrEmpty(ctx.get("book"));
+        Object bookBridge = bookObj.get("__bridge__");
+        if (!(bookBridge instanceof BookBridge)) {
+            bookBridge = new BookBridge(bookObj);
+            bookObj.put("__bridge__", bookBridge);
+        }
+        b.put("source", srcBridge);   // 覆盖 ctx 复制带入的裸 Map（桥才有方法面）
+        b.put("book", bookBridge);
         b.putIfAbsent("baseUrl", defaultStr(ctx.get("baseUrl"), mapGet(source, "bookSourceUrl")));
         b.putIfAbsent("chapter", mapOrEmpty(ctx.get("chapter")));
         Object chTitle = mapGet(ctx.get("chapter"), "title");
         b.putIfAbsent("title", defaultStr(ctx.get("title"), chTitle));
-        b.putIfAbsent("src", defaultStr(ctx.get("result"), null));
+        Object srcBind = defaultStr(ctx.get("result"), null);
+        if (srcBind != null) b.put("src", srcBind);
         Object pg = ctx.get("page");
         b.put("page", pg != null ? pg : Integer.valueOf(1));
         b.put("searchPage", pg != null ? pg : Integer.valueOf(1));
@@ -1114,8 +1204,61 @@ public final class RuleAnalyzer {
         // CookieStore/CacheManager），既有 ctx 值经桥 backing 透传（node 版为空 Map 占位）
         b.putIfAbsent("cookie", new JsExtensions.CookieBridge(mapOrEmpty(ctx.get("cookie"))));
         b.putIfAbsent("cache", new JsExtensions.CacheBridge());
+        // java 桥缺省注入（对齐阅读 evalJS bindings["java"]=this；社区源 java.log/toast 在
+        // 本函数构建的 bindings 里必须可用，否则 LiveConnect 把 java 解析成 JavaPackage 报
+        // "log 不是函数，它是 object"——爱丽丝书屋 init JS 的 catch(java.log) 依赖）
+        if (!(b.get("java") instanceof JsExtensions)) {
+            b.put("java", new JsExtensions(b));
+        }
         b.putIfAbsent("ctx", ctx);
         return b;
+    }
+
+    /**
+     * @put JSON 段显式执行（t4Detail 补跑 putRule）：格式 "@put:{...}"，JSON Map
+     * key→子规则，逐 entry 以 content 求值写变量池。对齐阅读 AnalyzeRuleCore.putRule。
+     */
+    public static void evalPutMap(String putSegment, Object content, Map<String, Object> ctx) {
+        try {
+            int start = putSegment.indexOf("{");
+            int end = putSegment.lastIndexOf("}");
+            if (start < 0 || end <= start) return;
+            Map<?, ?> putMap = parseJsonStringMap(putSegment.substring(start, end + 1));
+            if (putMap == null) return;
+            Repr repr = toRepr(content);
+            for (Map.Entry<?, ?> e : putMap.entrySet()) {
+                String key = String.valueOf(e.getKey());
+                Object subRule = e.getValue();
+                if (key.isEmpty() || subRule == null) continue;
+                // 独立子 ctx：仅 baseUrl/java/vars 桥接（对齐阅读 putRule → getString 的
+                // 调用面—— AnaylyzeRule 实例单一 baseUrl/content，无 JS 段污染态）
+                Map<String, Object> subCtx = new LinkedHashMap<String, Object>();
+                subCtx.put("baseUrl", ctx.get("baseUrl"));
+                subCtx.put("vars", varsOf(ctx, true));
+                subCtx.put("java", ctx.get("java") != null ? ctx.get("java") : new JsExtensions(subCtx));
+                subCtx.put("source", ctx.get("source"));
+                Object sub = evalRule(String.valueOf(subRule), repr, subCtx);
+                Map<String, Object> vars = varsOf(ctx, true);
+                if (vars != null) vars.put(key, jsValueToString(sub));
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "evalPutMap failed: " + e.getMessage());
+        }
+    }
+
+    /** harness 专用：暴露 buildJsBindings（复现引擎缓存污染链路） */
+    public static Map<String, Object> buildJsBindingsForTest(Map<String, Object> ctx, Object rootContent) {
+        return buildJsBindings(ctx, "", toRepr(rootContent));
+    }
+
+    /**
+     * book 上下文 JS 求值入口（对齐阅读 WebBook.runPreUpdateJs：AnalyzeRule(book, source)
+     * .evalJS(preUpdateJs)——bindings: source/book/baseUrl/java，result 为空）。供 T4 目录
+     * 前置脚本调用；失败由调用方降级（阅读 onFailure 仅记日志）。
+     */
+    public static void evalBookJs(String js, Map<String, Object> ctx) {
+        Map<String, Object> b = buildJsBindings(ctx, "", new Repr());
+        JsEngine.eval(js, b);
     }
 
     /**

@@ -30,6 +30,41 @@ public final class TemplateRenderer {
      */
     public static String render(String tpl, Map<String, Object> bindings) {
         if (tpl == null || tpl.isEmpty() || !tpl.contains("{{")) return tpl == null ? "" : tpl;
+        // source/book 桥兜底：bindings.source 为裸 Map 时（调用方未经 RuleAnalyzer/
+        // T4Actions.ensureBridges），包桥注入——模板段 JS 对 source.getVariable() 等方法面
+        // 的调用才能命中（对齐阅读 AnalyzeRule bindings 注入 BookSource 实例语义）
+        if (bindings != null && !(bindings.get("source") instanceof SourceBridge)) {
+            Object raw = bindings.get("source");
+            if (raw instanceof Map) {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> rawMap = (Map<String, Object>) raw;
+                Object existing = rawMap.get("__bridge__");
+                if (existing instanceof SourceBridge) {
+                    bindings.put("source", existing);
+                } else {
+                    Object sk = rawMap.get("bookSourceUrl");
+                    SourceBridge sb = new SourceBridge(
+                            sk != null ? String.valueOf(sk).trim() : "", rawMap);
+                    rawMap.put("__bridge__", sb);
+                    bindings.put("source", sb);
+                }
+            }
+        }
+        if (bindings != null && !(bindings.get("book") instanceof BookBridge)) {
+            Object raw = bindings.get("book");
+            if (raw instanceof Map) {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> rawMap = (Map<String, Object>) raw;
+                Object existing = rawMap.get("__bridge__");
+                if (existing instanceof BookBridge) {
+                    bindings.put("book", existing);
+                } else {
+                    BookBridge bb = new BookBridge(rawMap);
+                    rawMap.put("__bridge__", bb);
+                    bindings.put("book", bb);
+                }
+            }
+        }
         // 对齐 render 主循环：indexOf 找 {{，matchDoubleBrace 引号感知找配对 }}
         StringBuilder out = new StringBuilder(tpl.length());
         int i = 0;
@@ -150,9 +185,33 @@ public final class TemplateRenderer {
                 if (sv != null) return sv;
             }
             // 未命中 → JS 沙箱（jsLib 名字命中；真未定义名抛 ReferenceError，由 render 捕获置空）
-            return JsEngine.eval(expr, bindings);
+            return JsEngine.eval(prependJsLib(expr, bindings), bindings);
         }
-        return JsEngine.eval(expr, bindings);
+        return JsEngine.eval(prependJsLib(expr, bindings), bindings);
+    }
+
+    /**
+     * jsLib 前置（对齐 template.js#runJs 的 jsLib 共享作用域语义）：书源 jsLib 定义的共享函数
+     * （GetUL/Sort_/Ajax 等）在 {{}} 模板表达式内直接裸调——阅读 App 中 jsLib 先于模板求值
+     * 常驻执行（SharedJsScope topScope），此处以源码前置等价（表达式每次重执行函数定义，
+     * 幂等无害；loginUrl 顶部变量初始化自带 try/catch 可重复执行）。
+     */
+    private static String prependJsLib(String expr, Map<String, Object> bindings) {
+        if (bindings == null) return expr;
+        // source 可能是 SourceBridge（render 入口桥兜底后）或裸 Map——两态都取 jsLib
+        Object srcObj = bindings.get("source");
+        Object lib = null;
+        if (srcObj instanceof SourceBridge) {
+            lib = ((SourceBridge) srcObj).getProperty("jsLib");
+        } else if (srcObj instanceof Map) {
+            lib = ((Map<?, ?>) srcObj).get("jsLib");
+        }
+        if (lib instanceof String && !((String) lib).trim().isEmpty()) {
+            String s = (String) lib;
+            if (expr.contains(s)) return expr; // 表达式本身已含 jsLib（防重复拼接）
+            return s + "\n;\n" + expr;
+        }
+        return expr;
     }
 
     /** source/chapter 等 node 上下文对象以 Map 形态注入 bindings：安全取属性 */

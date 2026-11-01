@@ -300,6 +300,10 @@ public final class T4Actions {
      */
     static String renderUrl(Map<String, Object> ctx, Object tpl) {
         String s = tpl == null ? "" : String.valueOf(tpl);
+        // source/book 桥先行：{{}} 模板段直接经 TemplateRenderer.evalExpr 进 JS 沙箱（不经
+        // buildJsBindings），ctx.source 原始 Map 无方法面（source.getVariable 炸）——此处
+        // 预注入桥，模板与后续 eval 共用同一桥实例
+        ensureBridges(ctx);
         if (JS_URL.matcher(s).find()) {
             String rendered;
             try {
@@ -324,6 +328,30 @@ public final class T4Actions {
         Map<String, Object> b = new LinkedHashMap<>(ctx);
         b.put("result", s);
         return TemplateRenderer.render(s, b);
+    }
+
+
+    /** ctx.source/book 桥注入（幂等）：模板渲染与 JS 求值共用（见 renderUrl 注释） */
+    static void ensureBridges(Map<String, Object> ctx) {
+        Map<String, Object> source = strMapOf(ctx.get("source"));
+        Object sb = source.get("__bridge__");
+        if (!(sb instanceof bh.box.plugin.legado.engine.SourceBridge)) {
+            Object sk = SourceManager.mapGet(source, "bookSourceUrl");
+            sb = new bh.box.plugin.legado.engine.SourceBridge(
+                    sk != null ? String.valueOf(sk).trim() : "", source);
+            source.put("__bridge__", sb);
+        }
+        Map<String, Object> book = strMapOf(ctx.get("book"));
+        Object bb = book.get("__bridge__");
+        if (!(bb instanceof bh.box.plugin.legado.engine.BookBridge)) {
+            bb = new bh.box.plugin.legado.engine.BookBridge(book);
+            book.put("__bridge__", bb);
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> strMapOf(Object o) {
+        return o instanceof Map ? (Map<String, Object>) o : new LinkedHashMap<String, Object>();
     }
 
     // ============ home（对齐 t4/index.js#t4Home / parseExploreEntries） ============
@@ -653,7 +681,7 @@ public final class T4Actions {
 
     public static Map<String, Object> t4Detail(Map<String, Object> source, String ids) {
         Map<String, String> id = decodeBookId(ids);
-        String bookUrl = id.get("bookUrl");
+        String bookUrl = id.get("bookUrl");  // preUpdateJs 改写点（book.bookUrl）↓ 非 final 语义由下方局部重赋值实现
         String listName = id.get("name");
         if (bookUrl == null || bookUrl.isEmpty()) return emptyDetail(null);
         // legado BookInfo 阶段：baseUrl 绑 bookUrl；变量池回放该书搜索阶段快照（防多书同名变量串台）
@@ -684,6 +712,15 @@ public final class T4Actions {
             if (!initOut.isEmpty()) {
                 contentRepr = RuleAnalyzer.makeContent(initOut, "json".equals(contentRepr.kind) ? "json" : null);
             }
+            // 对齐阅读 putRule 语义：init 的 @put 变量（n/a/t/k/i/l/r/T/m/z/o）由每段求值前的
+            // putRule 用**整页详情 HTML**执行——不依赖 init <js> 段成功（爱丽丝 init 尾
+            // "src;" ReferenceError 曾致 m 丢失 → tocUrl 退化为站源根 → 目录 0 章）。
+            // 此处显式补跑：从 init 串提取 @put JSON，逐 entry 以 contentRepr 求值写池。
+            java.util.regex.Matcher pm = java.util.regex.Pattern.compile("@put:\\{[\\s\\S]+?\\}")
+                    .matcher(String.valueOf(initRule));
+            if (pm.find()) {
+                RuleAnalyzer.evalPutMap(pm.group(), contentRepr, ctx);
+            }
         }
 
         String name = strOf(evalRuleTrim(contentRepr, info.get("name"), ctx));
@@ -702,8 +739,30 @@ public final class T4Actions {
         // isUrl=true（legado BookInfo getString0 取第一项）；tocUrl 在全部字段之后（legado 同序）
         Object tocRule = info.get("tocUrl");
         String tocUrlRaw = tocRule != null ? RuleAnalyzer.evalRule(String.valueOf(tocRule), contentRepr, ctx, true).trim() : "";
-        String tocUrl = !tocUrlRaw.isEmpty() ? absRule(tocUrlRaw, bookUrl) : bookUrl;
-        List<Map<String, Object>> chapters = loadToc(ctx, tocUrl, mapOrEmpty(SourceManager.mapGet(source, "ruleToc")));
+        String tocUrl0 = !tocUrlRaw.isEmpty() ? absRule(tocUrlRaw, bookUrl) : bookUrl;
+        String tocUrl = tocUrl0;
+        // 对齐阅读 WebBook.getChapterListAwait：目录抓取前执行 ruleToc.preUpdateJs（book 上下文，
+        // 爱丽丝书屋靠它把 book.bookUrl 域名切到当前站源）
+        Map<String, Object> ruleTocMap = mapOrEmpty(SourceManager.mapGet(source, "ruleToc"));
+        Object preUpdateJs = ruleTocMap.get("preUpdateJs");
+        if (preUpdateJs instanceof String && !((String) preUpdateJs).trim().isEmpty()) {
+            try {
+                RuleAnalyzer.evalBookJs(RuleAnalyzer.prependJsLibPub((String) preUpdateJs, ctx), ctx);
+            } catch (Exception e) {
+                Log.w(TAG, "preUpdateJs failed: " + e.getMessage());
+            }
+            // 对齐阅读：preUpdateJs 可改写 book.bookUrl/tocUrl（爱丽丝切站源换域名），目录取改写后值
+            Object nb = SourceManager.mapGet(ctx.get("book"), "tocUrl");
+            if (nb instanceof String && !((String) nb).trim().isEmpty()
+                    && !String.valueOf(nb).equals(bookUrl)) {
+                tocUrl = absRule(String.valueOf(nb).trim(), bookUrl);
+            }
+            Object nbu = SourceManager.mapGet(ctx.get("book"), "bookUrl");
+            if (nbu instanceof String && !((String) nbu).trim().isEmpty()) {
+                bookUrl = String.valueOf(nbu).trim();
+            }
+        }
+        List<Map<String, Object>> chapters = loadToc(ctx, tocUrl, ruleTocMap);
         // 书名与目录双空 → 页面无效（404/验证码等），返回空列表
         if (name.isEmpty() && chapters.isEmpty()) return emptyDetail(null);
 
@@ -1046,6 +1105,9 @@ public final class T4Actions {
         Map<String, Object> chapter = cctx != null ? mapOrEmpty(cctx.get("chapter")) : null;
         String title = chapter != null ? strOf(chapter.get("title")) : null;
         Map<String, Object> ctx = makeCtx(source, chapterUrl, null, null, book, chapter, title, null);
+        // 对齐阅读 BookContent：正文阶段 analyzeRule.setContent(body, baseUrl)——src 绑定
+        // **响应体**（data:;base64 源的响应体是 hex 编码的章节 URL，
+        // ruleContent 里 java.hexDecodeToString(src) 还原真实地址依赖此绑定）
         Map<String, Object> rule = mapOrEmpty(SourceManager.mapGet(source, "ruleContent"));
         // legado WebBook.getContentAwait：content 规则为空 → 章节链接即播放地址（音频源常态）
         Object contentRule = rule.get("content");
@@ -1092,6 +1154,7 @@ public final class T4Actions {
             return isAudio ? audioResponse(source, "") : novelResponse("", "抓取失败: " + e.getMessage());
         }
         {
+            ctx.put("result", body); // src 绑定响应体（阅读 setContent(body) 语义）
             RuleAnalyzer.Repr content = RuleAnalyzer.makeContent(body);
             String part = readContent(content, contentRule, ctx);
             text = part;
@@ -1147,7 +1210,16 @@ public final class T4Actions {
         }
 
         // replaceRegex 净化：格式 "正则##替换"（可多段）
-        String cleaned = applyReplaceRegex(text, rule.get("replaceRegex"));
+        String cleaned = applyReplaceRegex(text, rule.get("replaceRegex"), ctx);
+        // 正文 HTML 段净化（@html 规则产物含 <p>/<br>——宿主 novel:// 视图为纯文本流，
+        // 阅读 App 端由 HtmlFormatter 承担同等净化）：块级标签→换行、其余标签剥除、实体解码
+        if (cleaned.indexOf('<') >= 0) {
+            cleaned = cleaned
+                    .replaceAll("(?i)<(br|/p|/div|/h[1-6]|/li)[^>]*>", "\n")
+                    .replaceAll("<[^>]+>", "")
+                    .replaceAll("\n{3,}", "\n\n");
+            cleaned = RuleAnalyzer.unescapeHtml(cleaned);
+        }
         // 漫画源（bookSourceType 2）→ pics:// 协议（宿主 ComicReadView）；提取失败落 novel:// 文字兜底
         return isComic ? comicResponse(ctx, cleaned) : novelResponse(cleaned, "");
     }
@@ -1211,7 +1283,7 @@ public final class T4Actions {
      * （replace 缺省删除；支持多组 ## 串联）。社区源常见 "##regex" 省略空 match 的
      * 纯删除形态，此时首段为正则。
      */
-    static String applyReplaceRegex(String text, Object replaceRegex) {
+    static String applyReplaceRegex(String text, Object replaceRegex, Map<String, Object> ctx) {
         if (replaceRegex == null || text == null || text.isEmpty()) return text;
         String out = text;
         String spec = String.valueOf(replaceRegex).trim();
@@ -1226,6 +1298,13 @@ public final class T4Actions {
                 replace = String.join("##", parts.subList(1, parts.size()));
             }
             if (match.isEmpty()) return text;
+            // {{chapter.title}} 等模板/变量在 match/replace 段先渲染（对齐阅读 makeUpRule
+            // —— ## 段 {{}}/@get 与代码体同批求值；chapter null 时 title 空）
+            Map<String, Object> rctx = ctx != null ? ctx : new LinkedHashMap<String, Object>();
+            Map<String, Object> chapterMap = mapOrEmpty(rctx.get("chapter"));
+            String chapterTitle = strOf(chapterMap.get("title"));
+            match = match.replace("{{chapter.title}}", chapterTitle);
+            replace = replace.replace("{{chapter.title}}", chapterTitle);
             Pattern p = Pattern.compile(match);
             Matcher m = p.matcher(out);
             out = m.replaceAll(jsReplacement(replace, m.groupCount()));

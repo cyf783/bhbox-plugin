@@ -50,8 +50,10 @@ dependencies {
     }
 
     // ===== 书源解析引擎（进程内自研，替代 node 版）=====
-    // JS 引擎：Rhino，阅读 app 官方同款，书源 JS 兼容性最佳，纯 Java 零 .so（宿主无 rhino，必须自带）
-    implementation 'org.mozilla:rhino:1.7.15'
+    // JS 引擎：Rhino，阅读 app 同款（阅读已迁 QuickJS 为主引擎，Rhino 保留兼容）；
+    // 1.9.2 补齐 ES2020 语法（?. ?? 箭头默认参 对象展开 matchAll——爱丽丝书屋等源依赖），
+    // 纯 Java 零 .so（宿主无 rhino，必须自带）
+    implementation 'org.mozilla:rhino:1.9.2'
     // HTML 解析 + 迷你 XPath 支持（宿主 release 混淆未 keep jsoup，原名不存在，必须自带）
     implementation "org.jsoup:jsoup:$rootProject.ext.jsoupVersion"
     // HTTP 抓取（进程内 okhttp 连接池，替代 node 版 execFileSync 子进程 spawn）。

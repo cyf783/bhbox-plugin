@@ -223,7 +223,7 @@ public class JsExtensions {
             String finalUrl = "POST".equals(method) ? p.url : UrlRule.encodeUrlQuery(p.url, p.options.charset);
             HttpFetcher.HttpResult r = fetchWithRetry(finalUrl, method, merged, postBody,
                     p.options.charset, retryOf(p.options.retry));
-            return new ConnectResult(r.body, r.finalUrl);
+            return new ConnectResult(r.body, r.finalUrl, r.code);
         } catch (Exception e) {
             // 对齐 legado connect 失败路径：StrResponse(url, it.stackTraceStr) 的 body 为堆栈字符串
             Log.w(TAG, "java.connect failed [" + truncate(rendered, 80) + "]: " + e.getMessage());
@@ -387,6 +387,26 @@ public class JsExtensions {
             return "";
         }
 
+        /**
+         * 对齐 legado StrResponse.cookies()：set-cookie 头 → {name=value} Map（多段 set-cookie
+         * 取 name 首值；登录流程 mapToCookie(response.cookies()) 依赖）。
+         */
+        public Map<String, String> cookies() {
+            LinkedHashMap<String, String> out = new LinkedHashMap<>();
+            for (Map.Entry<String, String> e : headersMap.entrySet()) {
+                if (!"set-cookie".equalsIgnoreCase(e.getKey())) continue;
+                String v = e.getValue();
+                if (v == null || v.isEmpty()) continue;
+                // okhttp 合并多 set-cookie 为逗号串；按 expiry 属性前的逗号粗拆（HttpDate 不含裸逗号）
+                for (String piece : v.split("(?i),(?=[^;]*=)")) {
+                    String kv = piece.trim().split(";", 2)[0];
+                    int eq = kv.indexOf('=');
+                    if (eq > 0) out.putIfAbsent(kv.substring(0, eq).trim(), kv.substring(eq + 1).trim());
+                }
+            }
+            return out;
+        }
+
         @Override
         public String toString() {
             return bodyStr;
@@ -402,10 +422,16 @@ public class JsExtensions {
     public static final class ConnectResult {
         public final String body;
         private final String finalUrl;
+        private final int codeV;
 
         ConnectResult(String body, String finalUrl) {
+            this(body, finalUrl, 0);
+        }
+
+        ConnectResult(String body, String finalUrl, int code) {
             this.body = body;
             this.finalUrl = finalUrl;
+            this.codeV = code;
         }
 
         public ConnectResult raw() {
@@ -418,6 +444,11 @@ public class JsExtensions {
 
         public String url() {
             return finalUrl != null ? finalUrl : "";
+        }
+
+        /** 对齐 legado Connection.Response.code()（爱丽丝书屋封面探测 java.connect(url).code()==200 依赖） */
+        public int code() {
+            return codeV;
         }
     }
 
@@ -615,6 +646,28 @@ public class JsExtensions {
     /** 对齐 java-api.js#setContent：正文暂存（node 存 vars['__content_'+key]） */
     public void setContent(Object v, Object key) {
         vars.put("__content_" + (key == null ? "" : String.valueOf(key)), v);
+    }
+
+    /**
+     * 对齐阅读 AnalyzeRule.refreshTocUrl（app 端 override：WebBook.getBookInfoAwait 重刷详情）。
+     * T4 无回环刷新通道：no-op（爱丽丝书屋 preUpdateJs 在切站源后调用；tocUrl 改写已由
+     * T4Actions 直接读 book.tocUrl 承担，此处仅保证方法面存在不炸）。
+     */
+    public void refreshTocUrl() {
+        Log.d(TAG, "refreshTocUrl: no-op in T4 (tocUrl re-read after preUpdateJs)");
+    }
+
+    /**
+     * 对齐阅读 AnalyzeRuleCore.setContent(content: Any?)（单参重载，JS 反射按 arity 匹配）：
+     * 重置规则求值根（AnalyzeRule.setContent 语义）——爱丽丝书屋 ruleBookInfo.intro 的 JS
+     * java.setContent(str) 把后续规则解析根切到 str。此处写入 bindings.root/result 供后续
+     * 规则段消费（AnalyzeRuleCore 完整语义是换 AnalyzeRule 实例内容，桥化等价：root 换根）。
+     */
+    public void setContent(Object v) {
+        if (v != null) {
+            bindings.put("root", v);
+            bindings.put("result", v);
+        }
     }
 
     public Object getContent(Object key) {
@@ -1072,6 +1125,104 @@ public class JsExtensions {
     /** 对齐 java-api.js#randomUUID */
     public String randomUUID() {
         return UUID.randomUUID().toString();
+    }
+
+    /**
+     * 对齐 legado JsExtensionsCommon#createAsymmetricCrypto(transformation)：
+     * JS 侧 java.createAsymmetricCrypto("RSA/ECB/PKCS1Padding").setPrivateKey(bytes)
+     *   .decrypt(data) / .decryptStr(data, b64)（爱丽丝书屋 chapter aes_key 解密依赖）。
+     */
+    public AsymmetricCrypto createAsymmetricCrypto(Object transformation) {
+        return new AsymmetricCrypto(String.valueOf(transformation == null ? "" : transformation));
+    }
+
+    /** RSA 非对称加密（对齐 legado AsymmetricCryptoAndroid 方法面：setPrivateKey/setPublicKey/decrypt/decryptStr） */
+    public static final class AsymmetricCrypto {
+        private final String transformation;
+        private java.security.Key key;
+
+        private AsymmetricCrypto(String transformation) {
+            this.transformation = transformation;
+        }
+
+        public AsymmetricCrypto setPrivateKey(Object keyBytes) {
+            try {
+                byte[] k = keyBytes instanceof byte[] ? (byte[]) keyBytes
+                        : Base64.decode(String.valueOf(keyBytes), Base64.DEFAULT);
+                this.key = java.security.KeyFactory.getInstance("RSA")
+                        .generatePrivate(new java.security.spec.PKCS8EncodedKeySpec(k));
+            } catch (Exception e) {
+                throw new RuntimeException("setPrivateKey failed: " + e.getMessage(), e);
+            }
+            return this;
+        }
+
+        public AsymmetricCrypto setPublicKey(Object keyBytes) {
+            try {
+                byte[] k = keyBytes instanceof byte[] ? (byte[]) keyBytes
+                        : Base64.decode(String.valueOf(keyBytes), Base64.DEFAULT);
+                this.key = java.security.KeyFactory.getInstance("RSA")
+                        .generatePublic(new java.security.spec.X509EncodedKeySpec(k));
+            } catch (Exception e) {
+                throw new RuntimeException("setPublicKey failed: " + e.getMessage(), e);
+            }
+            return this;
+        }
+
+        /** 解密 → 明文字节；String 入参按宽松 base64 解（对齐 legado decrypt(String)） */
+        public byte[] decrypt(Object data) {
+            try {
+                Cipher cipher = Cipher.getInstance(transformation);
+                cipher.init(Cipher.DECRYPT_MODE, key);
+                byte[] src;
+                if (data instanceof byte[]) {
+                    src = (byte[]) data;
+                } else {
+                    src = Base64.decode(String.valueOf(data == null ? "" : data), Base64.DEFAULT);
+                }
+                return cipher.doFinal(src);
+            } catch (Exception e) {
+                throw new RuntimeException("asymmetric decrypt failed: " + e.getMessage(), e);
+            }
+        }
+
+        /** 解密 → utf-8 字符串（对齐 hutool decryptStr；第二参 b64 兼容签名忽略——恒 base64 入） */
+        public String decryptStr(Object data) {
+            return new String(decrypt(data), StandardCharsets.UTF_8);
+        }
+
+        public String decryptStr(Object data, Object b64) {
+            return decryptStr(data);
+        }
+    }
+
+    /**
+     * 对齐 legado JsExtensionsCommon#getVerificationCode(imageUrl)：弹出验证码对话框等待用户输入。
+     * T4 无 UI 通道：data:image/svg+xml 的书源自绘验证（爱丽丝书屋评论验证码）返回约定值，
+     * 其余返回空串由书源 JS 的 try/catch 兜底（不炸穿规则求值）。
+     */
+    public String getVerificationCode(Object imageUrl) {
+        String u = imageUrl == null ? "" : String.valueOf(imageUrl);
+        Log.w(TAG, "getVerificationCode not supported in T4 (no UI): " + truncate(u, 60));
+        return "";
+    }
+
+    /**
+     * 对齐 legado CookieStore.mapToCookie：Map → "k1=v1; k2=v2"（空 Map → null）。
+     * 登录响应 response.cookies() 产物转 cookie 字符串（爱丽丝书屋登录流程依赖）。
+     */
+    public String mapToCookie(Object cookieMap) {
+        Object m = cookieMap instanceof Wrapper ? ((Wrapper) cookieMap).unwrap() : cookieMap;
+        if (m instanceof Map) {
+            StringBuilder sb = new StringBuilder();
+            for (Map.Entry<?, ?> e : ((Map<?, ?>) m).entrySet()) {
+                if (e.getKey() == null) continue;
+                if (sb.length() > 0) sb.append("; ");
+                sb.append(e.getKey()).append('=').append(e.getValue() == null ? "" : e.getValue());
+            }
+            return sb.length() > 0 ? sb.toString() : null;
+        }
+        return null;
     }
 
     /**

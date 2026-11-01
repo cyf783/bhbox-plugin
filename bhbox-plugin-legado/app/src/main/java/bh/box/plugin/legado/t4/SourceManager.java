@@ -43,9 +43,12 @@ public final class SourceManager {
     /** 强 WebView 交互特征：书源规则依赖内置浏览器（验证码/登录），无 WebView 环境不可用 */
     private static final String[] INCOMPATIBLE_MARKERS = {"startBrowserAwait", "startBrowser"};
 
-    /** 规则/URL 字段（兼容性扫描范围，排除 comment 等说明文本） */
+    /** 规则/URL 字段（兼容性扫描范围，排除 comment 等说明文本）。
+     *  loginUrl 不参与扫描：它是登录面板 UI 脚本（注册/书架/登录按钮 action），仅用户
+     *  主动操作时执行——T4 解析链路（搜索/发现/详情/目录/正文）不经过它，其含
+     *  java.startBrowser(...)（如爱丽丝书屋 reg()/BookShelf()）不代表解析依赖 WebView。 */
     private static final String[] RULE_KEYS = {
-            "searchUrl", "exploreUrl", "loginUrl", "jsLib",
+            "searchUrl", "exploreUrl", "jsLib",
             "ruleSearch", "ruleExplore", "ruleBookInfo", "ruleToc", "ruleContent",
     };
 
