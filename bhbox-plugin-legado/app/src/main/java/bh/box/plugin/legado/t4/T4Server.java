@@ -404,20 +404,15 @@ public final class T4Server extends NanoHTTPD {
 
     /** POST /login/set：写源级变量 {sk, variable}（base64 body，同 /params 形态） */
     private Response handleLoginSet(IHTTPSession session) throws IOException, ResponseException {
-        Map<String, String> files = new LinkedHashMap<>();
-        session.parseBody(files);
-        String raw = files.get("postData");
-        if (raw == null || raw.trim().isEmpty())
-            return json(Response.Status.BAD_REQUEST, kv("error", "empty body"));
-        byte[] bytes;
+        JsonObject in;
         try {
-            bytes = android.util.Base64.decode(raw.trim(), android.util.Base64.DEFAULT);
+            in = base64JsonBody(session);
         } catch (IllegalArgumentException e) {
             return json(Response.Status.BAD_REQUEST, kv("error", "invalid base64 body"));
         }
-        JsonObject in = GSON.fromJson(new String(bytes, java.nio.charset.StandardCharsets.UTF_8), JsonObject.class);
-        String sk = in != null && in.has("sk") && !in.get("sk").isJsonNull() ? in.get("sk").getAsString() : null;
-        String variable = in != null && in.has("variable") && !in.get("variable").isJsonNull()
+        if (in == null) return json(Response.Status.BAD_REQUEST, kv("error", "empty body"));
+        String sk = in.has("sk") && !in.get("sk").isJsonNull() ? in.get("sk").getAsString() : null;
+        String variable = in.has("variable") && !in.get("variable").isJsonNull()
                 ? in.get("variable").getAsString() : "";
         if (sk == null || sk.trim().isEmpty())
             return json(Response.Status.BAD_REQUEST, kv("error", "missing sk"));
@@ -495,18 +490,12 @@ public final class T4Server extends NanoHTTPD {
      * 参数重建内存 params 并重载书源——保存即生效，无需重启插件。
      */
     private Response handlePostParams(IHTTPSession session) throws IOException, ResponseException {
-        Map<String, String> files = new LinkedHashMap<>();
-        session.parseBody(files);
-        String raw = files.get("postData");
-        if (raw == null || raw.trim().isEmpty())
-            return json(Response.Status.BAD_REQUEST, kv("error", "empty body"));
-        byte[] bytes;
+        JsonObject in;
         try {
-            bytes = android.util.Base64.decode(raw.trim(), android.util.Base64.DEFAULT);
+            in = base64JsonBody(session);
         } catch (IllegalArgumentException e) {
             return json(Response.Status.BAD_REQUEST, kv("error", "invalid base64 body"));
         }
-        JsonObject in = GSON.fromJson(new String(bytes, java.nio.charset.StandardCharsets.UTF_8), JsonObject.class);
         if (in == null) return json(Response.Status.BAD_REQUEST, kv("error", "empty body"));
         String remoteUrls = in.has("remoteUrls") && !in.get("remoteUrls").isJsonNull()
                 ? in.get("remoteUrls").getAsString() : null;
@@ -524,6 +513,20 @@ public final class T4Server extends NanoHTTPD {
         out.put("usable", state.list.size());
         out.put("report", state.reportMap());
         return json(Response.Status.OK, out);
+    }
+
+    /**
+     * POST body（Base64(UTF-8 JSON)）→ JsonObject：绕开 NanoHTTPD 对非 form body
+     * 的单字节解码（中文路径会乱码）。空 body 返回 null；Base64 非法抛
+     * IllegalArgumentException（调用方映射 400）。
+     */
+    private static JsonObject base64JsonBody(IHTTPSession session) throws IOException, ResponseException {
+        Map<String, String> files = new LinkedHashMap<>();
+        session.parseBody(files);
+        String raw = files.get("postData");
+        if (raw == null || raw.trim().isEmpty()) return null;
+        byte[] bytes = android.util.Base64.decode(raw.trim(), android.util.Base64.DEFAULT);
+        return GSON.fromJson(new String(bytes, java.nio.charset.StandardCharsets.UTF_8), JsonObject.class);
     }
 
     /** 保存参数后热更新：对齐 /reload 语义清缓存，用宿主 bean 最新参数重建内存 params 并重载 */

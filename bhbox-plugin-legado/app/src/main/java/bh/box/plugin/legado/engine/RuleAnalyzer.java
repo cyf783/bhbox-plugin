@@ -1536,11 +1536,6 @@ public final class RuleAnalyzer {
         return out;
     }
 
-    private static boolean nonEmpty(Object r, boolean list) {
-        if (list) return r instanceof List && !((List<?>) r).isEmpty();
-        return r != null && !"".equals(r);
-    }
-
     private static JsonElement tryParseJson(String text) {
         if (text == null) return null;
         try {
@@ -1595,31 +1590,10 @@ public final class RuleAnalyzer {
         return s.length() > len ? s.substring(0, len) : s;
     }
 
-    /** 从 open（'{' 处）找配对 '}' 索引（引号内与嵌套深度不误判），未闭合返回 -1（对齐 analyzer.js#matchBrace） */
+    /** 从 open（'{' 处）找配对 '}' 索引（引号内与嵌套深度不误判），未闭合返回 -1
+     *  （对齐 analyzer.js#matchBrace，实现复用 UrlRule.matchBrace 同语义扫描） */
     private static int matchBrace(String s, int open) {
-        int depth = 0;
-        char quote = 0;
-        for (int i = open; i < s.length(); i++) {
-            char c = s.charAt(i);
-            if (quote != 0) {
-                if (c == '\\') {
-                    i++;
-                    continue;
-                }
-                if (c == quote) quote = 0;
-                continue;
-            }
-            if (c == '\'' || c == '"') {
-                quote = c;
-                continue;
-            }
-            if (c == '{') depth++;
-            else if (c == '}') {
-                depth--;
-                if (depth == 0) return i;
-            }
-        }
-        return -1;
+        return UrlRule.matchBrace(s, open);
     }
 
     // ============ 产物结构 ============

@@ -47,13 +47,6 @@ public class SourceBridge extends ScriptableObject {
         }
     }
 
-    private static void cacheDelete(String key) {
-        try {
-            com.github.catvod.utils.Cache.delete(CACHE_NS + key);
-        } catch (Throwable ignored) {
-        }
-    }
-
     private final String key;
     private final Map<String, Object> props;
 
@@ -65,12 +58,6 @@ public class SourceBridge extends ScriptableObject {
     @Override
     public String getClassName() {
         return "SourceBridge";
-    }
-
-    /** legado BaseSource.getKey(): bookSourceUrl */
-    public String jsGetKey() {
-        Object u = props.get("bookSourceUrl");
-        return u != null ? String.valueOf(u).trim() : key;
     }
 
     // ---------- 属性/方法统一探测 ----------
@@ -262,23 +249,6 @@ public class SourceBridge extends ScriptableObject {
     /** Java 侧属性读（宿主代码用：prependJsLib 取 jsLib 等；Rhino 侧走 get(String,Scriptable)） */
     public Object getProperty(String name) {
         return props.get(name);
-    }
-
-    /** Java 侧方法面探测（防宿主代码误当 Map） */
-    public boolean isBridge() {
-        return true;
-    }
-
-    /** Java 侧源级保存数据直写（legado BaseSource.put 等价，面板/宿主用） */
-    public void putSaved(String k, Object v) {
-        ns("v").put(String.valueOf(k), v == null ? "" : String.valueOf(v));
-        persistNs("v");
-    }
-
-    /** Java 侧源级保存数据直读 */
-    public String getSaved(String k) {
-        Object v = ns("v").get(String.valueOf(k));
-        return v != null ? String.valueOf(v) : "";
     }
 
     /** Java 侧变量直写（宿主/harness 用；JS 侧走 methodOf("setVariable")） */

@@ -68,24 +68,35 @@ public final class UrlRule {
     }
 
     /**
-     * 对齐 urlrule.js#parseUrlRule：解析完整 URL 规则 → { url, options }
-     * （url 中的 {{}} 模板由调用方先行渲染）。
+     * 对齐 urlrule.js#splitUrlRule：返回 [url, optionsText]（optionsText 含首尾花括号，
+     * 无尾巴则 null）。absRule 等需保留 options 原文（避免 {} 被编码）的场景用本方法；
+     * parseUrlRule 复用同一扫描。
      */
-    public static Parsed parseUrlRule(String rule) {
+    public static String[] splitUrlRule(String rule) {
         String r = rule == null ? "" : rule;
         Matcher m = OPTIONS_START.matcher(r);
         if (m.find()) {
             int start = m.start();
             int end = matchBrace(r, start);
             if (end >= 0) {
-                return new Parsed(r.substring(0, start).trim(), parseOptions(r.substring(start + 1, end + 1)));
+                return new String[]{r.substring(0, start).trim(), r.substring(start + 1, end + 1)};
             }
         }
-        return new Parsed(r.trim(), new Options());
+        return new String[]{r.trim(), null};
     }
 
-    /** 对齐 urlrule.js#splitUrlRule + matchBrace：从 ',' 后的 '{' 起配对扫描（忽略引号内内容） */
-    private static int matchBrace(String s, int open) {
+    /**
+     * 对齐 urlrule.js#parseUrlRule：解析完整 URL 规则 → { url, options }
+     * （url 中的 {{}} 模板由调用方先行渲染）。
+     */
+    public static Parsed parseUrlRule(String rule) {
+        String[] parts = splitUrlRule(rule);
+        return new Parsed(parts[0], parts[1] != null ? parseOptions(parts[1]) : new Options());
+    }
+
+    /** 对齐 urlrule.js#splitUrlRule + matchBrace：从 ',' 后的 '{' 起配对扫描（忽略引号内内容）；
+     *  同包 RuleAnalyzer 复用（analyzer.js#matchBrace 同语义） */
+    static int matchBrace(String s, int open) {
         int depth = 0;
         char quote = 0;
         for (int i = open; i < s.length(); i++) {

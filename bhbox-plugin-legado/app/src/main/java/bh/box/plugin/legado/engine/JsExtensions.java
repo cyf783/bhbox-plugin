@@ -124,22 +124,7 @@ public class JsExtensions {
         }
         String rendered = TemplateRenderer.render(String.valueOf(u), bindings);
         try {
-            // URL 尾部 ,{...} options（JS 源拼的 headers/method/body）需拆出合并——如七猫
-            // `java.ajax(url+','+java.get("headers"))` 的 App 签名头全在 options 里
-            UrlRule.Parsed p = UrlRule.parseUrlRule(rendered);
-            Map<String, String> merged = new LinkedHashMap<>(defaultHeaders());
-            if (p.options.headers != null) merged.putAll(p.options.headers);
-            String method = p.options.method != null ? p.options.method : "GET";
-            // POST 走 legado configureRequest 同款三分支（form 编码/CT 补全），与 fetchText 一致
-            String postBody = "POST".equals(method)
-                    ? UrlRule.applyPostBody("POST", p.options.body != null ? p.options.body : "", merged, p.options.charset)
-                    : null;
-            // legado encodeUrlParams isQuery=true：GET query 按 charset 编码（gbk 搜索关键字）
-            String finalUrl = "POST".equals(method) ? p.url : UrlRule.encodeUrlQuery(p.url, p.options.charset);
-            // 对齐 legado getOkHttpStrResponse：newCallStrResponse(option?.retry ?: 0)，失败重试
-            HttpFetcher.HttpResult r = fetchWithRetry(finalUrl, method, merged, postBody,
-                    p.options.charset, retryOf(p.options.retry));
-            return r.body;
+            return fetchByRule(rendered, null).body;
         } catch (Exception e) {
             Log.w(TAG, "java.ajax failed [" + truncate(rendered, 80) + "]: " + e.getMessage());
             // 对齐 legado JsExtensionsCommon#ajax：失败返回 stackTraceStr 而非空串（原 node 行为: 返回 ''）
@@ -212,23 +197,34 @@ public class JsExtensions {
     public ConnectResult connect(Object url, Object header) {
         String rendered = TemplateRenderer.render(String.valueOf(unwrap(url)), bindings);
         try {
-            UrlRule.Parsed p = UrlRule.parseUrlRule(rendered);
-            Map<String, String> merged = new LinkedHashMap<>(defaultHeaders());
-            if (p.options.headers != null) merged.putAll(p.options.headers);
-            merged.putAll(headerMapOf(header));
-            String method = p.options.method != null ? p.options.method : "GET";
-            String postBody = "POST".equals(method)
-                    ? UrlRule.applyPostBody("POST", p.options.body != null ? p.options.body : "", merged, p.options.charset)
-                    : null;
-            String finalUrl = "POST".equals(method) ? p.url : UrlRule.encodeUrlQuery(p.url, p.options.charset);
-            HttpFetcher.HttpResult r = fetchWithRetry(finalUrl, method, merged, postBody,
-                    p.options.charset, retryOf(p.options.retry));
+            HttpFetcher.HttpResult r = fetchByRule(rendered, headerMapOf(header));
             return new ConnectResult(r.body, r.finalUrl, r.code);
         } catch (Exception e) {
             // 对齐 legado connect 失败路径：StrResponse(url, it.stackTraceStr) 的 body 为堆栈字符串
             Log.w(TAG, "java.connect failed [" + truncate(rendered, 80) + "]: " + e.getMessage());
             return new ConnectResult(Log.getStackTraceString(e), null);
         }
+    }
+
+    /**
+     * ajax/connect 共用抓取路径（语义同 legado configureRequest → newCallStrResponse）：
+     * URL 尾部 ,{...} options 拆出（JS 源拼的 headers/method/body——如七猫
+     * `java.ajax(url+','+java.get("headers"))` 的 App 签名头全在 options 里）；
+     * 头合并顺序 = 缺省 UA → options.headers → extra（connect 自定义头最后覆盖）；
+     * POST 走 configureRequest 同款三分支（form 编码/CT 补全），GET query 按 charset
+     * 编码（gbk 搜索关键字）；失败重试 retry 次。
+     */
+    private HttpFetcher.HttpResult fetchByRule(String rendered, Map<String, String> extra) throws Exception {
+        UrlRule.Parsed p = UrlRule.parseUrlRule(rendered);
+        Map<String, String> merged = new LinkedHashMap<>(defaultHeaders());
+        if (p.options.headers != null) merged.putAll(p.options.headers);
+        if (extra != null) merged.putAll(extra);
+        String method = p.options.method != null ? p.options.method : "GET";
+        String postBody = "POST".equals(method)
+                ? UrlRule.applyPostBody("POST", p.options.body != null ? p.options.body : "", merged, p.options.charset)
+                : null;
+        String finalUrl = "POST".equals(method) ? p.url : UrlRule.encodeUrlQuery(p.url, p.options.charset);
+        return fetchWithRetry(finalUrl, method, merged, postBody, p.options.charset, retryOf(p.options.retry));
     }
 
     /**

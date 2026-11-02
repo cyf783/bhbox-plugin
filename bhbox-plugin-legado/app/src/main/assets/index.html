@@ -50,12 +50,24 @@ font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;resize:vertical
 .ptext:focus{border-color:var(--acc)}
 .hint.note.warn{color:var(--warn)}
 .srcs{list-style:none;margin-top:4px}
-.srcs li{display:flex;justify-content:space-between;gap:12px;padding:9px 2px;
+.srcs li{display:flex;align-items:center;gap:12px;padding:9px 2px;
 border-bottom:1px solid var(--line);font-size:13.5px}
 .srcs li:last-child{border-bottom:none}
-.srcs .n{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.srcs .g{color:var(--sub);font-size:12px;flex-shrink:0;max-width:45%;overflow:hidden;
-text-overflow:ellipsis;white-space:nowrap}
+.srcs .n{flex:1;min-width:0}
+.srcs .n b{display:block;font-size:13.5px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.srcs .n i{display:block;font-style:normal;font-size:12px;color:var(--sub);
+overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:1px}
+.ops{display:flex;gap:6px;flex-shrink:0}
+.sbtn{appearance:none;-webkit-appearance:none;border:1px solid var(--line);background:var(--card);color:var(--acc);
+border-radius:999px;padding:4px 12px;font-size:12px;font-weight:500;cursor:pointer;white-space:nowrap}
+.sbtn:active{border-color:var(--acc)}
+.mask{position:fixed;inset:0;background:rgba(16,24,40,.45);z-index:40}
+.sheet{position:fixed;left:0;right:0;bottom:0;max-width:640px;margin:0 auto;background:var(--card);
+border:1px solid var(--line);border-bottom:none;border-radius:16px 16px 0 0;padding:16px 16px 20px;
+max-height:85vh;overflow-y:auto;z-index:41}
+.sh-head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px}
+.sh-t{font-size:15px;font-weight:600}
+.sh-g{font-size:12px;color:var(--sub);margin-top:2px}
 .plist{list-style:none;font-size:13px;line-height:1.8}
 .plist .e b{color:var(--err)}.plist .i b{color:var(--warn)}.plist .s b{color:var(--sub)}
 .empty{padding:18px 2px;font-size:13px;color:var(--sub);text-align:center}
@@ -122,30 +134,42 @@ text-overflow:ellipsis;white-space:nowrap}
     <ul class="plist" id="plist"></ul>
   </section>
 
-  <section class="card" id="login-card" hidden><h2>书源登录 / 源变量<span class="cnt" id="lg-cnt">-</span></h2>
-    <p class="hint">URL 型登录源可直接打开登录页；自定义变量（站源切换等）在此填写保存，等效阅读 App 的源变量面板。</p>
-    <input class="search" id="lg-q" type="search" placeholder="搜索源名称…" oninput="lgFilt(this.value)">
-    <ul class="srcs" id="lg-list"></ul>
-    <div id="lg-editor" hidden>
-      <p class="hint" id="lg-title" style="font-weight:600;color:var(--ink);margin-top:10px"></p>
-      <p class="hint" id="lg-url" hidden>登录地址：<a id="lg-link" href="#" target="_blank" style="color:var(--acc)">打开登录页</a>（在网页里登录后，本站 Cookie/登录态留存于应用 WebView）</p>
-      <div id="lg-ui" hidden><p class="hint" style="font-weight:600;color:var(--ink);margin-top:10px">源内面板</p><div id="lg-rows"></div></div>
-      <textarea class="ptext" id="lg-var" rows="5" placeholder="源变量 JSON（如 {"sourl":"https://…"}），留空清除"></textarea>
-      <div class="btns">
-        <button class="btn pri" type="button" onclick="lgSave(this)">保存变量</button>
-        <button class="btn ghost" type="button" onclick="lgClose()">关闭</button>
-      </div>
-      <p class="hint note" id="lg-st" hidden></p>
-    </div>
-    <p class="empty" id="lg-empty" hidden>暂无支持登录/变量的书源。</p>
-  </section>
-
   <section class="card"><h2>书源列表<span class="cnt" id="cnt">-</span></h2>
     <input class="search" id="q" type="search" placeholder="搜索名称或分组…" oninput="filt(this.value)">
     <ul class="srcs" id="srcs"></ul>
     <p class="empty" id="empty" hidden>暂无可用书源，请检查书源配置后点击「重载书源」。</p>
     <p class="hint note">小说类源（novel://）需在 Mobile 端阅读，TV 端暂不支持。</p>
   </section>
+
+  <!-- 登录/源变量弹窗（底部 sheet）：书源列表行内「面板 / 变量」按钮打开；
+       「登录页」按钮直接跳转 /login/open，不经弹窗 -->
+  <div id="lg-modal" hidden>
+    <div class="mask" id="lg-mask"></div>
+    <div class="sheet" role="dialog" aria-modal="true">
+      <div class="sh-head">
+        <div style="min-width:0">
+          <p class="sh-t" id="lg-title" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></p>
+          <p class="sh-g" id="lg-group"></p>
+        </div>
+        <button class="sbtn" type="button" onclick="lgClose()" aria-label="关闭" style="padding:2px 12px">✕</button>
+      </div>
+      <div id="lg-urlrow" hidden class="btns" style="margin-top:12px">
+        <a class="btn ghost" id="lg-link" href="#" target="_blank">打开登录页 ↗</a>
+        <span class="hint" style="align-self:center">在网页里登录后，登录态留存于应用 WebView</span>
+      </div>
+      <div id="lg-ui" hidden style="margin-top:12px">
+        <p class="hint" style="font-weight:600;color:var(--ink)">源内面板</p>
+        <div id="lg-rows"></div>
+      </div>
+      <p class="hint" style="margin-top:12px">源变量 JSON（留空清除，保存后下一请求即读取新值）</p>
+      <textarea class="ptext" id="lg-var" rows="5" placeholder='源变量 JSON（如 {"sourl":"https://…"}），留空清除'></textarea>
+      <div class="btns">
+        <button class="btn pri" type="button" onclick="lgSave(this)">保存变量</button>
+        <button class="btn ghost" type="button" onclick="lgClose()">关闭</button>
+      </div>
+      <p class="hint note" id="lg-st" hidden></p>
+    </div>
+  </div>
 
   <p class="foot">Legado 书源服务 · <a href="/check" target="_blank">探活</a> · <a href="/">刷新本页</a></p>
 </div>
@@ -206,9 +230,17 @@ function render(d){
   document.getElementById('plist').innerHTML=html;
   document.getElementById('prob-card').hidden=html==='';
   var srcs=d.sources||[];html='';
+  var lgmap=window.__lgmap||{};
   srcs.forEach(function(s){var g=s.group||'';
+    var lg=lgmap[s.url]||null,ops='';
+    if(lg){
+      if(lg.loginUrl)ops+='<button class="sbtn" type="button" onclick="lgOpen(\''+lgEsc(lg.key)+'\')">登录页 ↗</button>';
+      if(lg.loginUiRaw)ops+='<button class="sbtn" type="button" onclick="lgEdit(\''+lgEsc(lg.key)+'\')">面板</button>';
+      ops+='<button class="sbtn" type="button" onclick="lgEdit(\''+lgEsc(lg.key)+'\')">变量</button>';
+    }
     html+='<li data-k="'+esc((s.name+' '+g).toLowerCase())
-      +'"><span class="n">'+esc(s.name)+'</span><span class="g">'+esc(g)+'</span></li>'});
+      +'"><span class="n"><b>'+esc(s.name)+'</b>'+(g?'<i>'+esc(g)+'</i>':'')+'</span>'
+      +(ops?'<span class="ops">'+ops+'</span>':'')+'</li>'});
   document.getElementById('srcs').innerHTML=html;
   document.getElementById('cnt').textContent=srcs.length;
   document.getElementById('empty').hidden=srcs.length>0;
@@ -217,7 +249,8 @@ function render(d){
 
 function loadStatus(){
   fetch('/status').then(function(r){return r.json()}).then(function(d){
-    document.getElementById('errbar').hidden=true;render(d);
+    document.getElementById('errbar').hidden=true;
+    window.__last=d;render(d);
   }).catch(function(){
     document.getElementById('errbar').hidden=false;
     document.getElementById('pill-count').textContent='状态未知';
@@ -278,59 +311,41 @@ function doSaveParams(b){
 }
 
 // ===== 书源登录 / 源变量 =====
+// /logins 对全部源返回（hasVar 恒真）：登录页按钮（URL 型 loginUrl）、面板按钮（loginUi）、
+// 变量按钮（所有源）渲染进书源列表行内；编辑走底部弹窗（#lg-modal）。
 var LG_CUR=null;
 function lgEsc(s){return esc(s)}
 function loadLogins(){
   fetch('/logins').then(function(r){return r.json()}).then(function(d){
-    var list=d.logins||[];
-    var card=document.getElementById('login-card');
-    card.hidden=list.length===0;
-    if(list.length===0)return;
-    document.getElementById('lg-cnt').textContent=list.length;
-    var html='';
-    list.forEach(function(x,i){
-      var btns=x.loginButtons&&x.loginButtons.length
-        ?'<span class="g">源内按钮：'+x.loginButtons.map(lgEsc).join('、')+'</span>':'';
-      var tag=x.loginUrl?'<button class="btn ghost" style="padding:4px 12px;font-size:12px" onclick="lgOpen(\''+lgEsc(x.key)+'\')">打开登录页</button>'
-             :(x.loginJs?'<span class="g">JS登录面板</span>':btns);
-      if(x.loginUrl&&btns)tag+=btns;
-      html+='<li data-k="'+lgEsc((x.name).toLowerCase())+'" data-i="'+i+'">'
-        +'<span class="n" style="cursor:pointer" onclick="lgEdit(\''+lgEsc(x.key)+'\',\''+lgEsc(x.name)+'\')">'+lgEsc(x.name)+'</span>'
-        +'<span class="g">'+tag
-        +'<a href="#" style="color:var(--acc);font-size:12px;margin-left:8px" onclick="lgEdit(\''+lgEsc(x.key)+'\',\''+lgEsc(x.name)+'\');return false">变量</a></span></li>';
-    });
-    document.getElementById('lg-list').innerHTML=html;
-    window.__lgdata=list;
-    document.getElementById('lg-empty').hidden=list.length>0;
+    var list=d.logins||[],map={};
+    list.forEach(function(x){map[x.key]=x});
+    window.__lgmap=map;
+    // 列表行内按钮依赖 __lgmap：晚于 /status 返回时重渲染一次
+    if(window.__last)render(window.__last);
   }).catch(function(){});
 }
-function lgFilt(v){
-  v=v.trim().toLowerCase();
-  var lis=document.getElementById('lg-list').children,n=0;
-  for(var i=0;i<lis.length;i++){
-    var hit=lis[i].getAttribute('data-k').indexOf(v)>=0;
-    lis[i].style.display=hit?'':'none';if(hit)n++;
-  }
-  document.getElementById('lg-cnt').textContent=n;
-}
-function lgFind(key){var l=window.__lgdata||[];
-  for(var i=0;i<l.length;i++)if(l[i].key===key)return l[i];return null}
-function lgEdit(key,name){
-  var x=lgFind(key);LG_CUR={key:key,name:name,loginUrl:x?x.loginUrl:''};
-  document.getElementById('lg-editor').hidden=false;
-  document.getElementById('lg-title').textContent='源变量 — '+name;
-  var u=document.getElementById('lg-url');
-  if(x&&x.loginUrl){u.hidden=false;document.getElementById('lg-link').href='/login/open?sk='+encodeURIComponent(key)+'&url='+encodeURIComponent(x.loginUrl);}
-  else u.hidden=true;
+function lgFind(key){var m=window.__lgmap||{};return m[key]||null}
+function lgEdit(key){
+  var x=lgFind(key);if(!x)return;
+  LG_CUR={key:key,name:x.name,loginUrl:x.loginUrl};
+  document.getElementById('lg-title').textContent=x.name;
+  // 分组取自主列表数据（/logins 无 group）
+  var gr='';
+  var ss=(window.__last&&window.__last.sources)||[];
+  for(var i=0;i<ss.length;i++){if(ss[i].url===key){gr=ss[i].group||'';break}}
+  document.getElementById('lg-group').textContent='书源登录 / 源变量'+(gr?' · '+gr:'');
+  var ur=document.getElementById('lg-urlrow');
+  if(x.loginUrl){ur.hidden=false;document.getElementById('lg-link').href='/login/open?sk='+encodeURIComponent(key)+'&url='+encodeURIComponent(x.loginUrl);}
+  else ur.hidden=true;
   var st=document.getElementById('lg-st');st.hidden=true;
   // loginUi 渲染（对齐阅读 SourceLoginDialog：按钮/输入行；action 经 /login/action）
   var rows=document.getElementById('lg-rows');rows.innerHTML='';
-  var ui=x&&x.loginUiRaw?null:null;
-  try{ui=JSON.parse(x&&x.loginUiRaw||'null')}catch(e){ui=null}
+  var ui=null;
+  try{ui=JSON.parse(x.loginUiRaw||'null')}catch(e){ui=null}
   var hasUi=ui&&ui.length;
   document.getElementById('lg-ui').hidden=!hasUi;
   if(hasUi){
-    ui.forEach(function(row,idx){
+    ui.forEach(function(row){
       if(row.type==='button'){
         if(!row.action)return; // 无 action 的分隔行
         var b=document.createElement('button');b.className='btn ghost';
@@ -356,7 +371,8 @@ function lgEdit(key,name){
   fetch('/login/get?sk='+encodeURIComponent(key)).then(function(r){return r.json()})
     .then(function(j){document.getElementById('lg-var').value=j.variable||''})
     .catch(function(){document.getElementById('lg-var').value=''});
-  document.getElementById('lg-editor').scrollIntoView({behavior:'smooth',block:'nearest'});
+  document.getElementById('lg-modal').hidden=false;
+  document.body.style.overflow='hidden';
 }
 function lgRunAction(name,action){
   var form={};
@@ -372,13 +388,15 @@ function lgRunAction(name,action){
       if(!j.ok)st.classList.add('warn');
     }).catch(function(){st.classList.add('warn');st.textContent='执行失败，请重试'});
 }
-function lgClose(){document.getElementById('lg-editor').hidden=true;LG_CUR=null}
+function lgClose(){
+  document.getElementById('lg-modal').hidden=true;
+  document.body.style.overflow='';
+  LG_CUR=null;
+}
+// 行内「登录页」直接整页跳转（302 + Set-Cookie bhbox_sk=sk，登录态经宿主回传），不经弹窗
 function lgOpen(key){
   var x=lgFind(key);
   if(!(x&&x.loginUrl))return;
-  var st=document.getElementById('lg-st');st.hidden=false;st.classList.remove('warn');
-  st.textContent='已打开登录页：登录完成后本页会自动收到登录态（宿主回传），完成后回来刷新。';
-  // 经插件 /login/open 302 跳转：同时 Set-Cookie bhbox_sk=<key>（宿主 token 回传凭据）
   location.href='/login/open?sk='+encodeURIComponent(key)+'&url='+encodeURIComponent(x.loginUrl);
 }
 function lgSave(b){
@@ -438,6 +456,7 @@ function verifyDone(){
 setInterval(verifyPoll,2000);
 
 document.getElementById('suburl').textContent=location.origin+'/config';
+document.getElementById('lg-mask').addEventListener('click',lgClose);
 loadStatus();
 loadParams();
 loadLogins();

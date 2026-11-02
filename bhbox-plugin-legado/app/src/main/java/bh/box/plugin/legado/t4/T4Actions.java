@@ -226,50 +226,9 @@ public final class T4Actions {
      * 解析（避免 {} 被百分号编码）。optionsText 含首尾花括号，直接以逗号拼回。
      */
     static String absRule(String rule, Object base) {
-        String[] parts = splitUrlRule(rule == null ? "" : rule);
+        String[] parts = UrlRule.splitUrlRule(rule == null ? "" : rule);
         String abs = absUrl(parts[0], base);
         return parts[1] != null ? abs + "," + parts[1] : abs;
-    }
-
-    /** 对齐 urlrule.js#splitUrlRule：返回 [url, optionsText]（optionsText 含花括号，无则 null） */
-    private static String[] splitUrlRule(String rule) {
-        String r = String.valueOf(rule == null ? "" : rule);
-        Matcher m = OPTIONS_START.matcher(r);
-        if (m.find()) {
-            int start = m.start();
-            int end = matchBrace(r, start);
-            if (end >= 0) {
-                return new String[]{r.substring(0, start).trim(), r.substring(start + 1, end + 1)};
-            }
-        }
-        return new String[]{r.trim(), null};
-    }
-
-    /** 对齐 urlrule.js#OPTIONS_START：/\s*,\s*(?=\{)/ */
-    private static final Pattern OPTIONS_START = Pattern.compile("\\s*,\\s*(?=\\{)");
-
-    /** 对齐 urlrule.js#matchBrace：从 ',' 后的 '{' 起配对扫描（忽略引号内内容） */
-    private static int matchBrace(String s, int open) {
-        int depth = 0;
-        char quote = 0;
-        for (int i = open; i < s.length(); i++) {
-            char c = s.charAt(i);
-            if (quote != 0) {
-                if (c == '\\') i++;
-                else if (c == quote) quote = 0;
-                continue;
-            }
-            if (c == '\'' || c == '"') {
-                quote = c;
-                continue;
-            }
-            if (c == '{') depth++;
-            else if (c == '}') {
-                depth--;
-                if (depth == 0) return i;
-            }
-        }
-        return -1;
     }
 
     /**
@@ -903,11 +862,6 @@ public final class T4Actions {
     private static void addHost(List<String> out, String h) {
         if (h == null || h.isEmpty() || out.contains(h)) return;
         out.add(h);
-    }
-
-    private static String currentSourceHost(Map<String, Object> source, Map<String, Object> book) {
-        List<String> cs = sourceHostCandidates(source, book);
-        return cs.isEmpty() ? null : cs.get(0);
     }
 
     /** sourl（源变量 GetUL 语义）的域名段 */
