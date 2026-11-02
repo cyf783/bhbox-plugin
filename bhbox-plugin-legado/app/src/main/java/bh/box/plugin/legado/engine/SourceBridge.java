@@ -30,30 +30,10 @@ public class SourceBridge extends ScriptableObject {
     /** Cache 持久化命名空间前缀（防与宿主其它插件键冲突） */
     private static final String CACHE_NS = "legado_";
 
-    /** catvod Cache 可用性（宿主 DatabaseTask 启动时 setManager；null=未探测） */
-    private static volatile Boolean cacheOk;
-
-    private static boolean cacheAvailable() {
-        if (cacheOk == null) {
-            try {
-                Class.forName("com.github.catvod.utils.Cache");
-                Object m = Class.forName("com.github.catvod.utils.Cache")
-                        .getMethod("getManager").invoke(null);
-                cacheOk = m != null ? Boolean.TRUE : Boolean.FALSE;
-            } catch (Throwable t) {
-                cacheOk = Boolean.FALSE;
-            }
-        }
-        return cacheOk;
-    }
-
-    /** Cache String 读（异常/未可用 → null） */
+    /** Cache String 读（异常/未注册 manager → null，内存 Map 兜底） */
     private static String cacheGetString(String key) {
         try {
-            Class<?> c = Class.forName("com.github.catvod.utils.Cache");
-            Object v = c.getMethod("getString", String.class, String.class)
-                    .invoke(null, CACHE_NS + key, null);
-            return v == null ? null : String.valueOf(v);
+            return com.github.catvod.utils.Cache.getString(CACHE_NS + key, null);
         } catch (Throwable t) {
             return null;
         }
@@ -62,16 +42,14 @@ public class SourceBridge extends ScriptableObject {
     /** Cache String 写（异常静默——内存 Map 兜底） */
     private static void cachePut(String key, String value) {
         try {
-            Class<?> c = Class.forName("com.github.catvod.utils.Cache");
-            c.getMethod("put", String.class, Object.class).invoke(null, CACHE_NS + key, value);
+            com.github.catvod.utils.Cache.put(CACHE_NS + key, value);
         } catch (Throwable ignored) {
         }
     }
 
     private static void cacheDelete(String key) {
         try {
-            Class<?> c = Class.forName("com.github.catvod.utils.Cache");
-            c.getMethod("delete", String.class).invoke(null, CACHE_NS + key);
+            com.github.catvod.utils.Cache.delete(CACHE_NS + key);
         } catch (Throwable ignored) {
         }
     }
@@ -214,7 +192,7 @@ public class SourceBridge extends ScriptableObject {
                 m = new LinkedHashMap<>();
                 // Cache 持久化合并：单键 ns（sourceVariable/loginHeader/userInfo 存
                 // "value" 一键；v 存整 Map JSON）重启后恢复
-                if (cacheAvailable()) {
+                {
                     try {
                         String saved = cacheGetString(k);
                         if (saved != null && !saved.isEmpty()) {
@@ -240,7 +218,6 @@ public class SourceBridge extends ScriptableObject {
 
     /** ns 变更后持久化到 Cache（写时双写；JSON 串存单键） */
     private void persistNs(String namespace) {
-        if (!cacheAvailable()) return;
         try {
             Map<String, Object> m = ns(namespace);
             String json = new com.google.gson.Gson().toJson(m);

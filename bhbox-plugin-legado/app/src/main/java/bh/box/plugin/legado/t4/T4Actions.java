@@ -369,40 +369,17 @@ public final class T4Actions {
         persistSourceVars(sk.trim(), base);
     }
 
-    private static volatile Boolean cacheOk;
-
-    private static boolean cacheAvailable() {
-        if (cacheOk == null) {
-            try {
-                Class.forName("com.github.catvod.utils.Cache");
-                Object m = Class.forName("com.github.catvod.utils.Cache")
-                        .getMethod("getManager").invoke(null);
-                cacheOk = m != null;
-            } catch (Throwable t) {
-                cacheOk = Boolean.FALSE;
-            }
-        }
-        return cacheOk;
-    }
-
     private static void persistSourceVars(String sk, Map<String, Object> base) {
-        if (!cacheAvailable()) return;
         try {
-            String json = new com.google.gson.Gson().toJson(base);
-            Class<?> c = Class.forName("com.github.catvod.utils.Cache");
-            c.getMethod("put", String.class, Object.class)
-                    .invoke(null, "legado_vars|" + sk, json);
+            com.github.catvod.utils.Cache.put("legado_vars|" + sk,
+                    new com.google.gson.Gson().toJson(base));
         } catch (Throwable ignored) {
         }
     }
 
-    @SuppressWarnings("unchecked")
     private static void restoreSourceVars(String sk, Map<String, Object> base) {
-        if (!cacheAvailable()) return;
         try {
-            Class<?> c = Class.forName("com.github.catvod.utils.Cache");
-            String json = (String) c.getMethod("getString", String.class, String.class)
-                    .invoke(null, "legado_vars|" + sk, null);
+            String json = com.github.catvod.utils.Cache.getString("legado_vars|" + sk, null);
             if (json == null || json.isEmpty()) return;
             com.google.gson.JsonObject o = com.google.gson.JsonParser.parseString(json).getAsJsonObject();
             for (Map.Entry<String, com.google.gson.JsonElement> e : o.entrySet()) {
@@ -758,30 +735,55 @@ public final class T4Actions {
 
         // 换站源自愈（对齐书源 preUpdateJs 换域逻辑，提前到 BookInfo 做容错）：
         // 收藏时的 bookUrl 域名可能已失效（爱丽丝等动态站源，主站被墙）。
-        // 顺序：**当前线路优先**（sourl，可用性高），失败再试收藏时的原域——
-        // 快路径先走，避免失效域 20s 超时拖慢打开。
-        String curHost = currentSourceHost(source, book);
+        // 候选线路依次尝试 + **严格校验页面是目标书**（失效域返回的停车场/错误页
+        // 通过弱校验会污染 pic/intro/bookUrl 并致目录 0 章 → 重启后详情页异常）。
         String content = null;
         String bookUrlTried = bookUrl;
-        if (curHost != null && bookUrl.contains("://") && !bookUrl.startsWith(curHost)) {
+        String path = pathOf(bookUrl);
+        List<String> cands = new ArrayList<>(sourceHostCandidates(source, book));
+        // 收藏时的原域兜底（候选之外的最后一手）
+        String storedHost = hostOf(bookUrl);
+        if (storedHost != null && !cands.contains(storedHost)) cands.add(storedHost);
+        for (String h : cands) {
+            String tryUrl = path == null ? null : h + path;
+            if (tryUrl == null) break;
             try {
-                content = fetchPage(ctx, bookUrl.replaceFirst("https?://[^/]+", curHost));
-                if (isInvalidBookPage(content)) content = null;
-                else bookUrlTried = bookUrl.replaceFirst("https?://[^/]+", curHost);
+                String c = fetchPage(ctx, tryUrl);
+                if (looksLikeBookPage(c, listName)) {
+                    content = c;
+                    bookUrlTried = tryUrl;
+                    break;
+                }
             } catch (Exception ignore) {
             }
         }
-        if (content == null) {
-            try {
-                content = fetchPage(ctx, bookUrl);
-                if (isInvalidBookPage(content)) content = null;
-                else bookUrlTried = bookUrl;
-            } catch (Exception e) {
-                content = null;
-            }
+        if (content != null) {
+            bookUrl = bookUrlTried;
+            book.put("bookUrl", bookUrl);
+            // ctx.baseUrl 同步换域后的地址（对齐下方 toc 自愈语义）：init/@put/字段
+            // 规则及 preUpdateJs 均以 baseUrl 求值——残留旧失效域会致解析错（重启后
+            // 走换域路径时详情异常，而首次搜索不换域正常）
+            ctx.put("baseUrl", bookUrl);
+            rememberGoodHost(source, bookUrl);
         }
-        if (content != null) bookUrl = bookUrlTried;
         if (content == null) return emptyDetail("抓取失败");
+        // 重启自愈：七猫等源 tocUrl/正文 JS 依赖 java.get("headers")（搜索时 java.put 的
+        // API 签名头，T4 变量池为内存态随重启清空 → 章节列表/正文接口缺头被拒 → 目录 0 章
+        // 「重启后详情加载不对」）。vod_id 的 bookUrl options 尾巴随身携带了搜索时的完整
+        // headers，此处重建（落源级池，同源 play 的正文 JS 复用）
+        try {
+            UrlRule.Parsed bp = UrlRule.parseUrlRule(bookUrl);
+            if (bp.options.headers != null && !bp.options.headers.isEmpty()) {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> vars = (Map<String, Object>) ctx.get("vars");
+                if (vars != null && !vars.containsKey("headers")) {
+                    LinkedHashMap<String, Object> wrap = new LinkedHashMap<>();
+                    wrap.put("headers", bp.options.headers);
+                    vars.put("headers", GSON.toJson(wrap));
+                }
+            }
+        } catch (Exception ignore) {
+        }
         RuleAnalyzer.Repr contentRepr = RuleAnalyzer.makeContent(content);
 
         // legado ruleBookInfo.init（BookInfo.analyzeBookInfo）：init 规则先执行，
@@ -884,26 +886,82 @@ public final class T4Actions {
 
     /** 当前站源域名（对齐书源 GetUL：sourceVariable.sourl 优先；取不到回退
      *  bookSourceUrl 的域名段。爱丽丝换站源后 sourl 指向可用线路） */
+    /**
+     * 可用线路候选（顺序去重）：① 最近验证可用线路（goodHost，Cache 持久化——
+     * 重启/变量丢失后仍能自愈）② sourl（用户当前选择，GetUL 语义）③ 书源 URL 域名。
+     * 动态站源源（爱丽丝）换域容错的统一取口。
+     */
+    static List<String> sourceHostCandidates(Map<String, Object> source, Map<String, Object> book) {
+        List<String> out = new ArrayList<>();
+        String sk = SourceManager.strOrEmpty(SourceManager.mapGet(source, "bookSourceUrl")).trim();
+        addHost(out, goodHostOf(sk));
+        addHost(out, sourceVariableHost(source));
+        addHost(out, hostOf(sk));
+        return out;
+    }
+
+    private static void addHost(List<String> out, String h) {
+        if (h == null || h.isEmpty() || out.contains(h)) return;
+        out.add(h);
+    }
+
     private static String currentSourceHost(Map<String, Object> source, Map<String, Object> book) {
+        List<String> cs = sourceHostCandidates(source, book);
+        return cs.isEmpty() ? null : cs.get(0);
+    }
+
+    /** sourl（源变量 GetUL 语义）的域名段 */
+    private static String sourceVariableHost(Map<String, Object> source) {
         try {
             Object bridge = source.get("__bridge__");
             String var = null;
             if (bridge instanceof bh.box.plugin.legado.engine.SourceBridge) {
                 var = ((bh.box.plugin.legado.engine.SourceBridge) bridge).jsGetVariable();
-            } else if (bridge instanceof Map) {
-                Object v = ((Map<?, ?>) bridge).get("__bridge__");
             }
             if (var != null && !var.isEmpty()) {
                 com.google.gson.JsonObject o = com.google.gson.JsonParser.parseString(var).getAsJsonObject();
                 if (o.has("sourl") && !o.get("sourl").isJsonNull()) {
-                    String sourl = o.get("sourl").getAsString();
-                    String h = hostOf(sourl);
-                    if (h != null) return h;
+                    return hostOf(o.get("sourl").getAsString());
                 }
             }
         } catch (Throwable ignored) {
         }
-        return hostOf(SourceManager.strOrEmpty(SourceManager.mapGet(source, "bookSourceUrl")));
+        return null;
+    }
+
+    /** 最近验证可用线路（Cache 持久化；跨重启自愈核心） */
+    static String goodHostOf(String sk) {
+        try {
+            if (sk == null || sk.isEmpty()) return null;
+            return com.github.catvod.utils.Cache.getString("legado_host|" + sk, null);
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    /** 记录可用线路（仅当该 url 抓取成功且页面有效时调用） */
+    static void rememberGoodHost(Map<String, Object> source, String url) {
+        try {
+            String sk = SourceManager.strOrEmpty(SourceManager.mapGet(source, "bookSourceUrl")).trim();
+            String h = hostOf(url);
+            if (sk.isEmpty() || h == null) return;
+            if (h.equals(goodHostOf(sk))) return;
+            com.github.catvod.utils.Cache.put("legado_host|" + sk, h);
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /** URL 的路径部分（含查询串；无则 null）——换域重写用（host+path 拼接） */
+    private static String pathOf(String url) {
+        try {
+            java.net.URI u = new java.net.URI(url);
+            String p = u.getRawPath();
+            if (p == null || p.isEmpty()) return null;
+            return u.getRawQuery() == null ? p : p + "?" + u.getRawQuery();
+        } catch (Exception e) {
+            int i = url.indexOf('/', url.indexOf("://") + 3);
+            return i < 0 ? null : url.substring(i);
+        }
     }
 
     private static String hostOf(String url) {
@@ -927,6 +985,22 @@ public final class T4Actions {
         // 404/禁用判定只在轻量页上做（34K 完整页 CSS/JS 可能含 "404" 字样误伤）
         if (t.length() < 5000 && (t.contains("404") || t.contains("小说被禁用或已删除"))) return true;
         return false;
+    }
+
+    /**
+     * 详情页是否为**目标书**（强校验）：含期望书名才算命中。
+     * 动态站源换域时，失效域名可能返回停车场/错误页（>500 字符通过弱校验）——
+     * 曾致 pic/intro 空、bookUrl 被写成死域名、目录 0 章（重启后"详情页加载不正常"）。
+     * 期望书名空（vod_id 未带名）时退回弱校验。
+     */
+    private static boolean looksLikeBookPage(String html, String expectedName) {
+        if (isInvalidBookPage(html)) return false;
+        if (expectedName == null || expectedName.trim().isEmpty()) return true;
+        String name = expectedName.trim();
+        if (html.contains(name)) return true;
+        // 实体/带空白变体：取书名前 6 字做前缀匹配（防站点插入空格或转义）
+        String probe = name.length() > 6 ? name.substring(0, 6) : name;
+        return html.contains(probe);
     }
 
     /** node: get(field) = analyzeStr(content, info[field]||'', ctx).trim()（空规则 → ''） */
@@ -1059,16 +1133,24 @@ public final class T4Actions {
         } catch (Exception e) {
             Log.w(TAG, "toc page failed: " + e.getMessage());
         }
-        // 换站源自愈（同 t4Detail）：tocUrl 域名失效 → 当前源域名重写重试
+        // 换站源自愈（同 t4Detail）：tocUrl 域名失效 → 候选线路重写重试（含目标书名校验）
         if (body.isEmpty() || isInvalidBookPage(body)) {
-            String srcUrl = SourceManager.strOrEmpty(SourceManager.mapGet(source, "bookSourceUrl")).trim();
-            String curHost = hostOf(srcUrl);
-            if (curHost != null && tocUrl.contains("://") && !tocUrl.startsWith(curHost)) {
+            String tpath = pathOf(tocUrl);
+            String tname = strOf(mapOrEmpty(ctx.get("book")).get("name"));
+            String tocHost = hostOf(tocUrl);
+            List<String> cands = new ArrayList<>(sourceHostCandidates(source,
+                    mapOrEmpty(ctx.get("book"))));
+            if (tocHost != null && !cands.contains(tocHost)) cands.add(tocHost);
+            for (String h : cands) {
+                if (tpath == null) break;
+                String tryUrl = h + tpath;
                 try {
-                    String c2 = fetchPage(ctx, tocUrl.replaceFirst("https?://[^/]+", curHost));
-                    if (c2 != null && !c2.isEmpty() && !isInvalidBookPage(c2)) {
+                    String c2 = fetchPage(ctx, tryUrl);
+                    if (looksLikeBookPage(c2, tname)) {
                         body = c2;
-                        ctx.put("baseUrl", tocUrl.replaceFirst("https?://[^/]+", curHost));
+                        ctx.put("baseUrl", tryUrl);
+                        rememberGoodHost(source, tryUrl);
+                        break;
                     }
                 } catch (Exception ignore) {
                 }

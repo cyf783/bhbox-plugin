@@ -719,6 +719,29 @@ public class JsExtensions {
     public static class CookieBridge {
         private final Map<String, Object> backing;
 
+        private static String ckKey(String url) {
+            return "legado_cookie|" + url;
+        }
+
+        private static void ckPersist(String url, String value) {
+            try {
+                if (value == null) {
+                    com.github.catvod.utils.Cache.delete(ckKey(url));
+                } else {
+                    com.github.catvod.utils.Cache.put(ckKey(url), value);
+                }
+            } catch (Throwable ignored) {
+            }
+        }
+
+        private static String ckLoad(String url) {
+            try {
+                return com.github.catvod.utils.Cache.getString(ckKey(url), null);
+            } catch (Throwable t) {
+                return null;
+            }
+        }
+
         public CookieBridge(Map<String, Object> backing) {
             this.backing = backing != null ? backing : new LinkedHashMap<String, Object>();
         }
@@ -729,15 +752,24 @@ public class JsExtensions {
 
         public String getCookie(String url) {
             Object v = backing.get(url);
-            return v != null ? String.valueOf(v) : "";
+            if (v != null) return String.valueOf(v);
+            // 会话内未见 → 从 Cache 恢复（跨请求/跨重启的站点会话 cookie）
+            String saved = ckLoad(url);
+            if (saved != null && !saved.isEmpty()) {
+                backing.put(url, saved);
+                return saved;
+            }
+            return "";
         }
 
         public void removeCookie(String url) {
             backing.remove(url);
+            ckPersist(url, null);
         }
 
         public void setCookie(String url, String cookie) {
             backing.put(String.valueOf(url), String.valueOf(cookie));
+            ckPersist(String.valueOf(url), String.valueOf(cookie));
         }
 
         public Object put(String key, Object value) {
