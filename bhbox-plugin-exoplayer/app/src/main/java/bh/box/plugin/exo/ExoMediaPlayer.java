@@ -21,6 +21,8 @@ import androidx.media3.exoplayer.DefaultLoadControl;
 import androidx.media3.exoplayer.DefaultRenderersFactory;
 import androidx.media3.exoplayer.ExoPlayer;
 import androidx.media3.exoplayer.LoadControl;
+import androidx.media3.exoplayer.analytics.AnalyticsListener;
+import androidx.media3.exoplayer.drm.KeyRequestInfo;
 import androidx.media3.exoplayer.source.MediaSource;
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector;
 import androidx.media3.exoplayer.trackselection.MappingTrackSelector;
@@ -104,6 +106,24 @@ public class ExoMediaPlayer extends com.github.catvod.plugin.player.spi.Player i
         setOptions();
 
         mMediaPlayer.addListener(ExoMediaPlayer.this);
+        // DRM 会话诊断监听：provisioning / license 失败的根因只在 onDrmSessionManagerError 里
+        // （fork 的 ExoPlayer.addListener 只收 Player.Listener，DRM 事件走 analytics 通道）
+        mMediaPlayer.addAnalyticsListener(new AnalyticsListener() {
+            @Override
+            public void onDrmSessionAcquired(AnalyticsListener.EventTime eventTime, int state) {
+                LOG.i("ExoMediaPlayer drm session acquired, state=" + state);
+            }
+
+            @Override
+            public void onDrmKeysLoaded(AnalyticsListener.EventTime eventTime, KeyRequestInfo keyRequestInfo) {
+                LOG.i("ExoMediaPlayer drm keys loaded");
+            }
+
+            @Override
+            public void onDrmSessionManagerError(AnalyticsListener.EventTime eventTime, Exception error) {
+                LOG.e("ExoMediaPlayer drm session error" + getErrorChain(error));
+            }
+        });
     }
 
     public DefaultTrackSelector getTrackSelector() {
@@ -316,10 +336,25 @@ public class ExoMediaPlayer extends com.github.catvod.plugin.player.spi.Player i
     @Override
     public void onPlayerError(PlaybackException error) {
         errorCode = error.errorCode;
-        LOG.e("ExoMediaPlayer onPlayerError: " + error.errorCode);
+        LOG.e("ExoMediaPlayer onPlayerError: " + error.errorCode
+                + " (" + error.getErrorCodeName() + ")" + getErrorChain(error));
         if (mEventListener != null) {
             mEventListener.onError(error.errorCode, Util.getRootCauseMessage(error));
         }
+    }
+
+    /** 错误 cause 链展开（DRM provisioning/license 失败的真正原因多在深层 cause 里） */
+    private static String getErrorChain(Throwable error) {
+        StringBuilder sb = new StringBuilder();
+        Throwable cause = error;
+        int depth = 0;
+        while (cause != null && depth < 6) {
+            sb.append("\n  <- ").append(cause.getClass().getSimpleName())
+                    .append(": ").append(cause.getMessage());
+            cause = cause.getCause();
+            depth++;
+        }
+        return sb.toString();
     }
 
     @Override

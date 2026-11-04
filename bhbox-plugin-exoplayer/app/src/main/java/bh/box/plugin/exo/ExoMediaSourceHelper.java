@@ -3,6 +3,7 @@ package bh.box.plugin.exo;
 import android.content.Context;
 import android.net.Uri;
 import android.text.TextUtils;
+import android.util.Base64;
 
 import androidx.annotation.OptIn;
 import androidx.media3.common.C;
@@ -28,16 +29,17 @@ import androidx.media3.exoplayer.source.DefaultMediaSourceFactory;
 import androidx.media3.exoplayer.source.MediaSource;
 import androidx.media3.exoplayer.source.ProgressiveMediaSource;
 import androidx.media3.extractor.DefaultExtractorsFactory;
-import androidx.media3.extractor.ExtractorsFactory;
 import androidx.media3.extractor.ts.TsExtractor;
 
 import com.github.catvod.net.OkHttp;
+import com.github.catvod.utils.LOG;
 import com.github.catvod.utils.Path;
 import com.google.common.net.HttpHeaders;
 
 import java.util.HashMap;
 import java.util.Map;
 import java.util.TreeMap;
+import java.util.UUID;
 
 @OptIn(markerClass = UnstableApi.class)
 public final class ExoMediaSourceHelper {
@@ -65,7 +67,10 @@ public final class ExoMediaSourceHelper {
     }
 
     public MediaSource getMediaSource(String uri, Map<String, String> headers, boolean isCache, int errorCode) {
-        Uri contentUri = Uri.parse(uri);
+        // KODIPROP（DRM 写源协议）解析：剥离后缀取干净 URL，无后缀时与旧版行为完全一致
+        KodiProps kodi = KodiProps.parse(uri);
+        String cleanUri = kodi == null ? uri : kodi.cleanUrl;
+        Uri contentUri = Uri.parse(cleanUri);
         // scheme 必须 equalsIgnoreCase：Uri.getScheme() 保留原始大小写（"RTSP://" 拿到的是 "RTSP"）。
         // rtspt(RTSP over TLS) 也要认 —— 它是真实存在的 scheme，只判 rtsp 会漏。
         String scheme = contentUri.getScheme();
@@ -76,39 +81,216 @@ public final class ExoMediaSourceHelper {
             return new RtspMediaSource.Factory().createMediaSource(MediaItem.fromUri(contentUri));
         }
         Map<String, String> requestHeaders = toRequestHeaders(headers);
-        int contentType = inferContentType(uri);
+        int contentType = resolveContentType(cleanUri, kodi);
         // 每个 MediaSource 一套独立 factory：旧实现复用全局 factory + setHeaders()，
         // 后建源会把先建源的请求头覆盖掉（切线路/多线路探测时串头）。
         DataSource.Factory factory = createDataSourceFactory(requestHeaders);
-        if (isCache) {
+        // DRM 计划：KODIPROP 带 license_type 时构建（未识别 type 时 plan 为 null，按无 DRM 播放）
+        DrmPlan drmPlan = kodi == null ? null : buildDrmPlan(kodi);
+        // DRM 内容强制不走边播缓存：加密分片落盘无意义且有密钥泄漏面
+        boolean useCache = isCache && drmPlan == null;
+        if (useCache) {
             factory = getCacheDataSourceFactory(factory, requestHeaders);
         }
+        MediaItem mediaItem = drmPlan == null ? MediaItem.fromUri(contentUri) : drmPlan.mediaItem;
         if (errorCode == PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED) {
-            MediaItem.Builder builder = new MediaItem.Builder().setUri(Uri.parse(uri.trim().replace("\\", "")));
+            MediaItem.Builder builder = new MediaItem.Builder().setUri(Uri.parse(cleanUri.trim().replace("\\", "")));
             builder.setMimeType(MimeTypes.APPLICATION_M3U8);
-            return new DefaultMediaSourceFactory(createDataSourceFactory(requestHeaders), getExtractorsFactory())
-                    .createMediaSource(builder.build());
+            DefaultMediaSourceFactory fallbackFactory =
+                    new DefaultMediaSourceFactory(createDataSourceFactory(requestHeaders), getExtractorsFactory());
+            if (drmPlan != null) {
+                fallbackFactory.setDrmSessionManagerProvider(drmPlan.provider);
+            }
+            return fallbackFactory.createMediaSource(builder.build());
         }
         switch (contentType) {
             case C.CONTENT_TYPE_SS:
-                return new SsMediaSource.Factory(factory).createMediaSource(MediaItem.fromUri(contentUri));
+                return applyDrm(new SsMediaSource.Factory(factory), drmPlan).createMediaSource(mediaItem);
             // 兜底：Util.inferContentType 对 rtsp/rtspt 返回该值。上面的 scheme 判断已覆盖，
             // 但保留这一支以防将来有人改了入口判断却没同步这里（RTSP 走了 Progressive 会直接起播失败）。
             case C.CONTENT_TYPE_RTSP:
                 return new RtspMediaSource.Factory().createMediaSource(MediaItem.fromUri(contentUri));
             case C.CONTENT_TYPE_DASH:
-                return new DashMediaSource.Factory(factory).createMediaSource(MediaItem.fromUri(contentUri));
+                return applyDrm(new DashMediaSource.Factory(factory), drmPlan).createMediaSource(mediaItem);
             case C.CONTENT_TYPE_HLS:
-                return new HlsMediaSource.Factory(factory)
-                        .setLoadErrorHandlingPolicy(new HlsErrorHandlingPolicy())
-                        .createMediaSource(MediaItem.fromUri(contentUri));
+                return applyDrm(new HlsMediaSource.Factory(factory)
+                        .setLoadErrorHandlingPolicy(new HlsErrorHandlingPolicy()), drmPlan)
+                        .createMediaSource(mediaItem);
             case C.CONTENT_TYPE_OTHER:
             default:
-                return new ProgressiveMediaSource.Factory(factory).createMediaSource(MediaItem.fromUri(contentUri));
+                // unfragmented CENC：把 ClearKey 密钥透传给 Mp4Extractor，在 extractor 层解密后按明文输出
+                ProgressiveMediaSource.Factory progressiveFactory =
+                        drmPlan != null && drmPlan.mp4ClearKeys != null
+                                ? new ProgressiveMediaSource.Factory(factory,
+                                        getExtractorsFactory().setMp4ClearKeys(drmPlan.mp4ClearKeys))
+                                : new ProgressiveMediaSource.Factory(factory);
+                return applyDrm(progressiveFactory, drmPlan).createMediaSource(mediaItem);
         }
     }
 
-    private static synchronized ExtractorsFactory getExtractorsFactory() {
+    /** DRM 模式下把会话管理提供者挂到 MediaSource 工厂上 */
+    private static <F extends MediaSource.Factory> F applyDrm(F factory, DrmPlan drmPlan) {
+        if (drmPlan != null) {
+            factory.setDrmSessionManagerProvider(drmPlan.provider);
+        }
+        return factory;
+    }
+
+    /** 容器类型：KODIPROP 的 manifest_type 显式指定时优先，否则回落 URL 关键字推断 */
+    private static int resolveContentType(String cleanUri, KodiProps kodi) {
+        if (kodi != null) {
+            String manifestType = kodi.get("manifest_type");
+            if (!TextUtils.isEmpty(manifestType)) {
+                String type = manifestType.trim().toLowerCase();
+                if (type.contains("mpd") || type.contains("dash")) {
+                    return C.CONTENT_TYPE_DASH;
+                }
+                if (type.contains("m3u8") || type.contains("hls")) {
+                    return C.CONTENT_TYPE_HLS;
+                }
+                LOG.e("ExoMediaSourceHelper", "未识别的 manifest_type: " + manifestType + "，回落 URL 推断");
+            }
+        }
+        return inferContentType(cleanUri);
+    }
+
+    /**
+     * DRM 方案 UUID 映射（对齐 FongMi Drm.getUUID() 语义）。
+     * 未识别的 type 返回 null → 整体按无 DRM 播放（不做硬抛错，避免单源毒死整条线路）。
+     */
+    private static UUID mapScheme(String licenseType) {
+        if (TextUtils.isEmpty(licenseType)) {
+            return null;
+        }
+        switch (licenseType.trim().toLowerCase()) {
+            case "widevine":
+            case "com.widevine.alpha":
+                return C.WIDEVINE_UUID;
+            case "clearkey":
+            case "org.w3.clearkey":
+                return C.CLEARKEY_UUID;
+            case "playready":
+            case "com.microsoft.playready":
+                return C.PLAYREADY_UUID;
+            default:
+                return null;
+        }
+    }
+
+    /**
+     * 由 KODIPROP 键值构建 DRM 计划（MediaItem + 会话管理提供者）。
+     * <p>
+     * license_key 三种形态：
+     * <ul>
+     *   <li>http(s) URL → License Server 模式（DrmConfiguration.licenseUri）；</li>
+     *   <li>keys JSON（{"keys":[...]}）→ ClearKey 静态密钥直供（licenseUri 非 http，
+     *       由 {@link BhDrmSessionManagerProvider} 转 LocalMediaDrmCallback）；</li>
+     *   <li>b64:/裸 base64 → PSSH 数据模式：不设 licenseUri，数据经 pssh 注入补齐 init data。</li>
+     * </ul>
+     */
+    private DrmPlan buildDrmPlan(KodiProps kodi) {
+        UUID scheme = mapScheme(kodi.get("license_type"));
+        if (scheme == null) {
+            LOG.e("ExoMediaSourceHelper", "未识别的 license_type: " + kodi.get("license_type") + "，按无 DRM 播放");
+            return null;
+        }
+        String licenseKey = kodi.get("license_key");
+        // license 请求头：common/stream 先并入，license_headers 最后 put 优先级最高
+        Map<String, String> licenseHeaders = KodiProps.parseJsonHeaders(kodi.get("common_headers"));
+        licenseHeaders.putAll(KodiProps.parseJsonHeaders(kodi.get("stream_headers")));
+        licenseHeaders.putAll(KodiProps.parseJsonHeaders(kodi.get("license_headers")));
+        MediaItem.DrmConfiguration.Builder drm = new MediaItem.DrmConfiguration.Builder(scheme)
+                .setLicenseRequestHeaders(licenseHeaders)
+                .setForceSessionsForAudioAndVideoTracks(true);
+        if (!TextUtils.isEmpty(licenseKey)) {
+            String key = licenseKey.trim();
+            if (key.startsWith("http://") || key.startsWith("https://")) {
+                drm.setLicenseUri(key);
+            } else if (KodiProps.isKeysJson(key)) {
+                // 单引号归一后直供 CDM（ClearKeyUtil 只认标准双引号 JSON）
+                drm.setLicenseUri(key.replace('\'', '"'));
+            }
+            // 其余形态（b64:/裸 base64）= PSSH 数据，见 resolvePssh
+        }
+        byte[] pssh = resolvePssh(kodi);
+        if (pssh == null && TextUtils.isEmpty(licenseKey)) {
+            LOG.e("ExoMediaSourceHelper", "DRM 配置不完整：license_type=" + kodi.get("license_type")
+                    + " 但既无 license_key 也无 pssh，按无 DRM 播放");
+            return null;
+        }
+        // license 请求复用插件 OkHttp 连接池与 UA；流请求头不掺入（流头走 createDataSourceFactory）
+        DataSource.Factory drmDataSourceFactory =
+                new OkHttpDataSource.Factory(OkHttp.client()).setUserAgent(mUserAgent);
+        MediaItem mediaItem = new MediaItem.Builder()
+                .setUri(kodi.cleanUrl)
+                .setDrmConfiguration(drm.build())
+                .build();
+        // ClearKey keys JSON：同时产出 extractor 层密钥（unfragmented CENC MP4 直接解密，
+        // 无需 MediaDrm 会话；fMP4 场景下 provider 的 session 链路照常生效，互不干扰）
+        byte[][] mp4ClearKeys = null;
+        if (C.CLEARKEY_UUID.equals(scheme) && !TextUtils.isEmpty(licenseKey)
+                && KodiProps.isKeysJson(licenseKey)) {
+            mp4ClearKeys = KodiProps.parseClearKeys(licenseKey);
+            if (mp4ClearKeys == null) {
+                LOG.e("ExoMediaSourceHelper", "ClearKey keys JSON 无有效密钥，extractor 层解密不可用");
+            }
+        }
+        return new DrmPlan(mediaItem,
+                new BhDrmSessionManagerProvider(drmDataSourceFactory, pssh, scheme), mp4ClearKeys);
+    }
+
+    /** PSSH 数据解析：pssh= 键优先，其次 license_key 的 b64:/裸 base64 形态 */
+    private static byte[] resolvePssh(KodiProps kodi) {
+        String pssh = kodi.get("pssh");
+        if (TextUtils.isEmpty(pssh)) {
+            String licenseKey = kodi.get("license_key");
+            if (TextUtils.isEmpty(licenseKey) || KodiProps.isKeysJson(licenseKey)) {
+                return null;
+            }
+            String key = licenseKey.trim();
+            if (key.startsWith("http://") || key.startsWith("https://")) {
+                return null; // License URL，非 PSSH 数据
+            }
+            if (key.startsWith("b64:")) {
+                pssh = key.substring(4);
+            } else if (looksLikeBase64(key)) {
+                pssh = key;
+            } else {
+                LOG.e("ExoMediaSourceHelper", "license_key 非 URL/JSON/base64，忽略: " + key);
+                return null;
+            }
+        }
+        try {
+            return Base64.decode(pssh, Base64.DEFAULT);
+        } catch (IllegalArgumentException e) {
+            LOG.e("ExoMediaSourceHelper", "PSSH base64 解码失败: " + pssh);
+            return null;
+        }
+    }
+
+    /** 裸 base64 识别：字符集受限、长度为 4 的倍数且非 http（License URL 已在上游排除） */
+    private static boolean looksLikeBase64(String value) {
+        if (value.length() < 16 || value.length() % 4 != 0) {
+            return false;
+        }
+        return value.matches("[A-Za-z0-9+/]+={0,2}");
+    }
+
+    /** DRM 计划：携带 drmConfiguration 的 MediaItem + 会话管理提供者 + extractor 层 ClearKey */
+    private static final class DrmPlan {
+        final MediaItem mediaItem;
+        final BhDrmSessionManagerProvider provider;
+        /** unfragmented CENC 的 extractor 层密钥对（kid/key 交替），非 ClearKey keys JSON 时为 null */
+        final byte[][] mp4ClearKeys;
+
+        DrmPlan(MediaItem mediaItem, BhDrmSessionManagerProvider provider, byte[][] mp4ClearKeys) {
+            this.mediaItem = mediaItem;
+            this.provider = provider;
+            this.mp4ClearKeys = mp4ClearKeys;
+        }
+    }
+
+    private static synchronized DefaultExtractorsFactory getExtractorsFactory() {
         // 注意：libs/ 这套 aar（media3 1.11.0 基线）的 DefaultTsPayloadReaderFactory 只有
         // FLAG_IGNORE_AAC_STREAM / FLAG_IGNORE_H264_STREAM / FLAG_IGNORE_SPLICE_INFO_STREAM /
         // FLAG_OVERRIDE_CAPTION_DESCRIPTORS 四个官方 flag，没有 fork 定制的
