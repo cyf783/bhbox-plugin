@@ -215,7 +215,8 @@ function render(d){
   document.getElementById('pill-count').textContent=d.usable+' 个可用源';
   var t=document.getElementById('pill-time');
   if(d.loadedAt){t.hidden=false;
-    t.textContent='加载于 '+String(d.loadedAt).slice(0,19).replace('T',' ')}
+    var ts=new Date(d.loadedAt);
+    t.textContent='加载于 '+(isNaN(ts.getTime())?String(d.loadedAt).slice(0,19).replace('T',' '):ts.toLocaleString())}
   setSt('st-ok',d.usable,false);
   setSt('st-err',errs.length,errs.length>0);
   setSt('st-inc',inc.length,inc.length>0);
