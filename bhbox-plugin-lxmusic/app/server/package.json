@@ -1,0 +1,16 @@
+{
+  "name": "lxmusic-server",
+  "version": "1.0.0",
+  "private": true,
+  "description": "洛雪音源插件 node 服务（lx shim + 曲库适配），零运行时依赖，仅 Node 内置模块。",
+  "scripts": {
+    "build": "node build.js"
+  },
+  "devDependencies": {
+    "esbuild": "^0.20.2"
+  },
+  "dependencies": {
+    "crypto-js": "^4.1.1",
+    "iconv-lite": "^0.7.3"
+  }
+}

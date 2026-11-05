@@ -1,0 +1,14 @@
+{
+  "id": "bh.box.plugin.lxmusic",
+  "name": "洛雪音源 Spider 插件",
+  "description": "洛雪自定义源脚本转 T3 音乐源。站点 key 以 [lx_] 开头，api 填 lx 脚本地址（http(s)://、file:// 或本地源 ./lx/ 路径）",
+  "type": "spider",
+  "spider": "lx",
+  "mainClass": "bh.box.plugin.lxmusic.LxMusicPlugin",
+  "downloadUrl": "https://h-box-release.netlify.app/release/plugins/lxmusic.apk",
+  "version": 100,
+  "versionName": "1.0.0",
+  "minSdk": 23,
+  "minAppVersion": 383,
+  "depends": ["bh.box.plugin.node"]
+}
