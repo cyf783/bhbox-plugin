@@ -56,13 +56,13 @@ public class LxMusicPlugin implements ISpiderPlugin {
     @Override
     public Spider getSpider(String key, String api, String ext) {
         try {
-            // 缓存：相同 key 不重复创建；server 意外退出时在此自愈（重启 + 刷新 baseUrl）
+            // 缓存：相同 key 不重复创建；server 意外退出时经 ensureAlive 自愈（持锁重启 + 刷新 baseUrl）
             if (spiders.containsKey(key)) {
-                Spider cached = spiders.get(key);
-                if (cached instanceof LxSpider && (!serverManager.isRunning() || !serverAlive())) {
+                LxSpider cached = (LxSpider) spiders.get(key);
+                if (cached != null && (!serverManager.isRunning() || !serverAlive())) {
                     LOG.i("LxMusic", "server 未运行，重启自愈");
-                    startServer();
-                    ((LxSpider) cached).setBaseUrl(serverManager.getBaseUrl());
+                    String base = ensureAlive();
+                    if (!TextUtils.isEmpty(base)) cached.setBaseUrl(base);
                 }
                 return cached;
             }
@@ -75,10 +75,14 @@ public class LxMusicPlugin implements ISpiderPlugin {
                 return new SpiderNull();
             }
 
-            // 再启动 server（脚本按请求实时读取，无需为新源重启）
-            if (!serverManager.isRunning() || !serverAlive()) startServer();
+            // 再启动 server（脚本按请求实时读取，无需为新源重启）；ensureAlive 持锁，防并发首建互相杀
+            String base = ensureAlive();
+            if (TextUtils.isEmpty(base)) {
+                LOG.e("LxMusic", "server 启动失败");
+                return new SpiderNull();
+            }
 
-            spider.setBaseUrl(serverManager.getBaseUrl());
+            spider.setBaseUrl(base);
             spiders.put(key, spider);
             return spider;
         } catch (Throwable e) {
@@ -100,8 +104,8 @@ public class LxMusicPlugin implements ISpiderPlugin {
         }
     }
 
-    /** 确认 server 存活（必要时重启自愈），返回可用 baseUrl；server 不可用返回 null */
-    String ensureAlive() {
+    /** 确认 server 存活（必要时重启自愈），返回可用 baseUrl。判断+重启整体持锁：防多站点并发失败时连环 stop/start 互相杀 */
+    synchronized String ensureAlive() {
         if (serverManager.isRunning() && serverAlive()) return serverManager.getBaseUrl();
         LOG.i("LxMusic", "server 未响应，重启自愈");
         startServer();

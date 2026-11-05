@@ -3,7 +3,6 @@ package bh.box.plugin.lxmusic;
 import android.text.TextUtils;
 
 import com.github.catvod.utils.LOG;
-import com.github.catvod.utils.Shell;
 
 import java.io.BufferedReader;
 import java.io.File;
@@ -146,16 +145,14 @@ public class LxServerManager {
         }
     }
 
-    /** 停止 node 服务 */
+    /** 停止 node 服务（只杀自己启动的进程，不按进程名 killall——宿主内其它插件也用 node） */
     public void stop() {
         serverUp.set(false);
         starting.set(false);
         if (nodeProcess != null) {
             nodeProcess.destroy();
+            nodeProcess.destroyForcibly();
             nodeProcess = null;
-            if (nodeBinary != null) {
-                Shell.exec("killall -9 " + nodeBinary.getAbsolutePath());
-            }
         }
     }
 
