@@ -1,5 +1,6 @@
 package bh.box.plugin.legado;
 
+import android.os.Environment;
 import android.text.TextUtils;
 
 import com.github.catvod.plugin.IServicePlugin;
@@ -30,6 +31,9 @@ import bh.box.plugin.legado.t4.T4Server;
 public class LegadoPlugin implements IServicePlugin {
 
     public static final String ID = "bh.box.plugin.legado";
+
+    /** 宿主 9978 /file/ 端点前缀（映射逻辑见 app .../server/actioin/File.java:148-170） */
+    private static final String FILE_SERVER_BASE = "http://127.0.0.1:9978/file/";
 
     /**
      * 当前生效参数原始值（remoteUrls 多行值：每行 http(s):// 订阅地址或 file:// 本地书源
@@ -92,15 +96,46 @@ public class LegadoPlugin implements IServicePlugin {
      * 本地书源参数 → 本机文件服务地址。宿主 9978 /file/ 端点以 sdcard 根为基准提供本地文件
      * （宝盒/bookSource.json → http://127.0.0.1:9978/file/宝盒/bookSource.json），与
      * ApiLoadHelper/UrlHelper 消费 /file/ 地址的生态一致；参数值兼容 file:// 前缀与
-     * 绝对路径（剥挂载根成相对段），已是 http(s) URL 则原样返回。
+     * 绝对路径（按挂载根剥成相对段），已是 http(s) URL 则原样返回。
      */
     private static String toFileServerUrl(String raw) {
         if (TextUtils.isEmpty(raw)) return null;
         String s = raw.trim();
         if (s.startsWith("http://") || s.startsWith("https://")) return s;
         if (s.startsWith("file://")) s = s.substring("file://".length());
-        while (s.startsWith("/")) s = s.substring(1);
-        return "http://127.0.0.1:9978/file/" + s;
+        String relative = toFileServerRelative(s);
+        return relative == null ? null : FILE_SERVER_BASE + relative;
+    }
+
+    /**
+     * 把本地路径转成宿主 /file/ 端点要求的"相对 sdcard 根"路径。
+     *
+     * 宿主 onFile 取 URI 中 "/file/" 之后的部分，直接拼在
+     * Environment.getExternalStorageDirectory() 之后（app/.../server/actioin/File.java:154-156），
+     * 所以绝对路径必须先剥掉挂载根，否则会拼成 /storage/emulated/0/storage/emulated/0/... 而 404：
+     * - /sdcard/...：按路径段匹配（/sdcardfoo 不匹配）
+     * - /storage/emulated/&lt;当前用户&gt;/...：根由 Environment 动态取得，多用户下同样有效
+     * 相对路径原样返回；宿主无法映射的绝对路径（外部卡 /storage/XXXX-XXXX、其它用户、/data 等）
+     * 保持旧行为（去掉前导 / 交给宿主，最终 404），不做假映射。
+     *
+     * @return 相对路径；仅挂载根本身（没有实际文件）或空串返回 null
+     */
+    private static String toFileServerRelative(String path) {
+        if (path.isEmpty()) return null;
+        if (!path.startsWith("/")) return path;
+        String root = Environment.getExternalStorageDirectory().getAbsolutePath();
+        String relative;
+        if (path.equals("/sdcard") || path.startsWith("/sdcard/")) {
+            relative = path.substring("/sdcard".length());
+        } else if (path.equals(root) || path.startsWith(root + "/")) {
+            relative = path.substring(root.length());
+        } else {
+            relative = path;
+        }
+        int i = 0;
+        while (i < relative.length() && relative.charAt(i) == '/') i++;
+        relative = relative.substring(i);
+        return relative.isEmpty() ? null : relative;
     }
 
     /** 宿主 bean 最新参数 → T4Server 启动参数 JSON（{"remoteUrls": 合并值}），start 与 /params 热更新共用 */
@@ -199,8 +234,9 @@ public class LegadoPlugin implements IServicePlugin {
         String lower = l.toLowerCase(Locale.ROOT);
         if (!lower.startsWith("http://") && !lower.startsWith("https://")) {
             if (lower.startsWith("file://")) l = l.substring("file://".length());
-            while (l.startsWith("/")) l = l.substring(1);
-            l = "file://" + l;
+            String relative = toFileServerRelative(l);
+            if (relative == null) return remoteUrls;
+            l = "file://" + relative;
         }
         return TextUtils.isEmpty(remoteUrls) ? l : remoteUrls + "\n" + l;
     }
