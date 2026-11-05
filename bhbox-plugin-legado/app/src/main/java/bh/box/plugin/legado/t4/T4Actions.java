@@ -692,28 +692,36 @@ public final class T4Actions {
         Map<String, Object> ctx = makeCtx(source, bookUrl, null, null, book, null, null, snap);
         Map<String, Object> info = mapOrEmpty(SourceManager.mapGet(source, "ruleBookInfo"));
 
-        // 换站源自愈（对齐书源 preUpdateJs 换域逻辑，提前到 BookInfo 做容错）：
-        // 收藏时的 bookUrl 域名可能已失效（爱丽丝等动态站源，主站被墙）。
-        // 候选线路依次尝试 + **严格校验页面是目标书**（失效域返回的停车场/错误页
-        // 通过弱校验会污染 pic/intro/bookUrl 并致目录 0 章 → 重启后详情页异常）。
+        // 首选 bookUrl 原域直取：该 URL 来自搜索阶段刚返回的结果（活 URL），不做
+        // looksLikeBookPage 强校验——漫画/音频等 API JSON 源（响应为加密 data，无书名
+        // 文本）过不了书名校验，会被整体误杀 → detail 空列表 → 宿主回落小说模式
         String content = null;
         String bookUrlTried = bookUrl;
-        String path = pathOf(bookUrl);
-        List<String> cands = new ArrayList<>(sourceHostCandidates(source, book));
-        // 收藏时的原域兜底（候选之外的最后一手）
-        String storedHost = hostOf(bookUrl);
-        if (storedHost != null && !cands.contains(storedHost)) cands.add(storedHost);
-        for (String h : cands) {
-            String tryUrl = path == null ? null : h + path;
-            if (tryUrl == null) break;
-            try {
-                String c = fetchPage(ctx, tryUrl);
-                if (looksLikeBookPage(c, listName)) {
-                    content = c;
-                    bookUrlTried = tryUrl;
-                    break;
+        try {
+            content = fetchPage(ctx, bookUrl);
+        } catch (Exception ignore) {
+        }
+        if (content == null) {
+            // 原域抓取失败 → 换站源自愈（对齐书源 preUpdateJs 换域逻辑，提前到 BookInfo 做容错）：
+            // 候选线路依次尝试 + **严格校验页面是目标书**（失效域返回的停车场/错误页
+            // 通过弱校验会污染 pic/intro/bookUrl 并致目录 0 章 → 重启后详情页异常）。
+            String path = pathOf(bookUrl);
+            List<String> cands = new ArrayList<>(sourceHostCandidates(source, book));
+            // 收藏时的原域兜底（候选之外的最后一手）
+            String storedHost = hostOf(bookUrl);
+            if (storedHost != null && !cands.contains(storedHost)) cands.add(storedHost);
+            for (String h : cands) {
+                String tryUrl = path == null ? null : h + path;
+                if (tryUrl == null) break;
+                try {
+                    String c = fetchPage(ctx, tryUrl);
+                    if (looksLikeBookPage(c, listName)) {
+                        content = c;
+                        bookUrlTried = tryUrl;
+                        break;
+                    }
+                } catch (Exception ignore) {
                 }
-            } catch (Exception ignore) {
             }
         }
         if (content != null) {
@@ -1394,6 +1402,9 @@ public final class T4Actions {
 
         // replaceRegex 净化：格式 "正则##替换"（可多段）
         String cleaned = applyReplaceRegex(text, rule.get("replaceRegex"), ctx);
+        // 漫画源（bookSourceType 2）→ pics:// 协议（宿主 ComicReadView）；提取失败落 novel:// 文字兜底。
+        // 必须在 HTML 净化前分发：净化剥除全部标签会连同 <img src=...> 一起剥掉，漫画提取不到图
+        if (isComic) return comicResponse(ctx, cleaned);
         // 正文 HTML 段净化（@html 规则产物含 <p>/<br>——宿主 novel:// 视图为纯文本流，
         // 阅读 App 端由 HtmlFormatter 承担同等净化）：块级标签→换行、其余标签剥除、实体解码
         if (cleaned.indexOf('<') >= 0) {
@@ -1403,8 +1414,7 @@ public final class T4Actions {
                     .replaceAll("\n{3,}", "\n\n");
             cleaned = RuleAnalyzer.unescapeHtml(cleaned);
         }
-        // 漫画源（bookSourceType 2）→ pics:// 协议（宿主 ComicReadView）；提取失败落 novel:// 文字兜底
-        return isComic ? comicResponse(ctx, cleaned) : novelResponse(cleaned, "");
+        return novelResponse(cleaned, "");
     }
 
     /** node: read(repr) = analyzeStr(repr, rule.content||'', ctx) || ''（空规则 → ''） */

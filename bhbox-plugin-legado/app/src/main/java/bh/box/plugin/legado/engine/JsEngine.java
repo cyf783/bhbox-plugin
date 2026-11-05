@@ -53,12 +53,45 @@ public final class JsEngine {
         protected void onContextCreated(Context cx) {
             cx.setLanguageVersion(Context.VERSION_ES6);
             cx.setOptimizationLevel(-1);
+            ensureRegExpProxy(cx);
             super.onContextCreated(cx);
         }
     };
 
+    /** Rhino 1.9 的 RegExpProxy 经 ServiceLoader（线程上下文 ClassLoader）装配：宿主动态
+     *  加载插件时该装配链读不到插件 APK 内的 META-INF/services 描述符（Context 类静态
+     *  初始化先于本类 static 块或使用非 TCCL 加载器），regExpProxy 恒 null → 所有 JS 正则
+     *  字面量抛 "Regular expressions are not available."。此处绕开 ServiceLoader：以插件
+     *  ClassLoader 直接实例化官方 RegExpLoaderImpl，逐 Context 反射注入 package-private
+     *  字段 regExpProxy（无 public setter）。 */
+    private static volatile Object REGEXP_PROXY;
+
+    private static void ensureRegExpProxy(Context cx) {
+        try {
+            if (REGEXP_PROXY == null) {
+                ClassLoader cl = JsEngine.class.getClassLoader();
+                Class<?> impl = Class.forName("org.mozilla.javascript.regexp.RegExpLoaderImpl", true, cl);
+                // RegExpLoaderImpl 是工厂：newProxy() 产出 RegExpImpl（RegExpProxy 实现）
+                REGEXP_PROXY = ((org.mozilla.javascript.RegExpLoader) impl.getDeclaredConstructor().newInstance()).newProxy();
+            }
+            java.lang.reflect.Field f = Context.class.getDeclaredField("regExpProxy");
+            f.setAccessible(true);
+            if (f.get(cx) == null) f.set(cx, REGEXP_PROXY);
+        } catch (Throwable e) {
+            android.util.Log.w("legado-engine", "regexp proxy inject failed: " + e);
+        }
+    }
+
     static {
-        ContextFactory.initGlobal(FACTORY);
+        Thread t = Thread.currentThread();
+        ClassLoader old = t.getContextClassLoader();
+        ClassLoader own = JsEngine.class.getClassLoader();
+        if (own != null && own != old) t.setContextClassLoader(own);
+        try {
+            ContextFactory.initGlobal(FACTORY);
+        } finally {
+            if (own != null && own != old) t.setContextClassLoader(old);
+        }
     }
 
     /** 对齐 template.js#runJs scriptCache：插入序 LinkedHashMap，删最早即迭代器首个 */
