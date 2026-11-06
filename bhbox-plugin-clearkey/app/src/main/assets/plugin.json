@@ -1,0 +1,13 @@
+{
+  "id": "bh.box.plugin.extractor.clearkey",
+  "name": "DMR ClearKey 解密代理插件",
+  "description": "本地解密代理：让全部播放器内核（IJK/MPV/系统）都能播 ClearKey 加密的 unfragmented CENC MP4。机制原因起播会慢一点。EXO插件自带DRM，无需此插件，起播快，如果使用EXO播放，不要安装此插件。",
+  "type": "extractor",
+  "mainClass": "bh.box.plugin.extractor.clearkey.ClearKeyExtractorPlugin",
+  "downloadUrl": "https://h-box-release.netlify.app/release/plugins/clearkey.apk",
+  "version": 100,
+  "versionName": "1.0.0",
+  "minSdk": 23,
+  "minAppVersion": 401,
+  "params": []
+}

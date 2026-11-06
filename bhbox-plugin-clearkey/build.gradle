@@ -1,0 +1,13 @@
+plugins {
+    id 'com.android.application' version '8.5.1' apply false
+}
+
+// 以下 ext 与 bhbox 根工程保持一致，供 :app 模块 build.gradle 通过 rootProject.ext.* 引用
+ext {
+    compileSdk = 36
+    minSdk = 23
+    targetSdk = 28
+    gsonVersion = '2.13.2'
+    jsoupVersion = '1.15.3'
+    okhttpVersion = '5.3.2'
+}

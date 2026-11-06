@@ -1,0 +1,36 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'bh.box.plugin.extractor.clearkey'
+    compileSdk rootProject.ext.compileSdk
+
+    defaultConfig {
+        applicationId "bh.box.plugin.extractor.clearkey"
+        minSdk 23
+        targetSdk rootProject.ext.targetSdk
+        versionCode 100
+        versionName "1.0.0"
+    }
+
+    buildTypes {
+        debug {
+            minifyEnabled false
+            shrinkResources false
+            debuggable true
+        }
+        release {
+            minifyEnabled true
+            shrinkResources true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+}
+
+dependencies {
+    compileOnly 'com.github.cyf783:bhbox-catvod:1.0.0'
+}
+
+// 零依赖自写混淆字典任务（共享脚本，与 thunder 等插件一致）
+apply from: "$rootDir/gradle/proguard-dictionary.gradle"
