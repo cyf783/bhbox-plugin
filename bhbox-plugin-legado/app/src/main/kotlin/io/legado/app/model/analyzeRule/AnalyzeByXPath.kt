@@ -7,7 +7,7 @@ import com.fleeksoft.ksoup.nodes.Node
 import com.fleeksoft.ksoup.nodes.TextNode
 import com.fleeksoft.ksoup.parser.Parser
 import com.fleeksoft.ksoup.select.Elements
-import org.jsoup.select.selectXpath
+import org.jsoup.select.XPathEvaluator
 
 // 书源 XPath 规则解析。@Keep 移除：commonMain 无 androidx.annotation，
 // 反射保活改由 shared consumer-rules.pro -keep 登记（照 QueryTTF 先例）。
@@ -45,25 +45,10 @@ class AnalyzeByXPath(doc: Any) {
 
     private fun getResult(xPath: String): List<Node>? {
         return try {
-            // jsoup selectXpath（1.15.3）不支持 /text() 步（返回空集），legado 原 JsoupXpath 完整
-            // 支持——剥离尾步改取元素 text()（getNodeText 对 Element 同语义）
-            var xp = xPath
-            var textStep = false
-            if (xp.endsWith("/text()")) {
-                xp = xp.removeSuffix("/text()")
-                textStep = true
-            }
-            if (xp.contains("/@")) {
-                val parts = xp.split("/@", limit = 2)
-                val elementPath = parts[0].ifEmpty { "." }
-                val attrName = parts[1]
-                val elements = baseElement.selectXpath(elementPath, Element::class)
-                elements.map { TextNode(it.attr(attrName)) }
-            } else if (textStep) {
-                baseElement.selectXpath(xp, Element::class).map { TextNode(it.text()) }
-            } else {
-                baseElement.selectXpath(xp, Node::class)
-            }
+            // 统一交给 XPathEvaluator：/text()、//text()、/@attr、/@* 与 | 并集都在求值器内部
+            // 处理，并原样保留 TextNode（旧的 selectXpath(xPath, Node::class) 扩展只留 Element，
+            // 会把文本节点丢掉；原先的「剥离 /text() 尾步取 Element.text()」只是近似）。
+            XPathEvaluator.evaluate(xPath, baseElement)
         } catch (_: Exception) {
             null
         }
