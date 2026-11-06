@@ -19,6 +19,16 @@
 # ===== JS 反射触达面 =====
 # java.* 桥：书源 JS 的 java.ajax/toast/get/put/... 字符串级调用全部 public 方法
 -keep class bh.box.plugin.legado.engine.JsExtensions { public *; }
+# 内部类不在主类 keep 范围内：createSymmetricCrypto().decrypt/decryptStr/encrypt、
+# StrResponse.body()/code()/cookies()、ConnectResult.body()、CacheBridge.delete() 等
+# 被 JS 按方法名反射调用，混淆后真机直接 NoSuchMethodError / 「不是函数」
+-keep class bh.box.plugin.legado.engine.JsExtensions$* { public *; }
+-keep class bh.box.plugin.legado.engine.SourceBridge { public *; }
+-keep class bh.box.plugin.legado.engine.BookBridge { public *; }
+# 书源 loginCheckJs 用 Packages.io.legado.app.help.http.StrResponse(url, html) 按完整包名
+# 解析 Java 类：包名、类名、构造器与方法名一个都不能混淆
+-keep class io.legado.app.help.http.StrResponse { public *; }
+-keeppackagenames io.legado.app.help.http
 # Rhino：自身大量反射 + LiveConnect 动态生成类
 -dontwarn org.mozilla.javascript.**
 -keep class org.mozilla.javascript.** { *; }

@@ -123,6 +123,34 @@ public final class HttpFetcher {
      */
     private static volatile Boolean webviewCookiesOk;
 
+    /**
+     * OkHttp Headers 只接受 ASCII 可打印字符；书源常把含中文的 URL
+     * （如 {@code https://book4.cc/AU文学/仙侠/}）直接拼进 Referer，
+     * OkHttp 会抛 {@code Unexpected char 0x6587 in Referer value}。
+     * 非 ASCII / 控制字符按 UTF-8 百分号编码，纯 ASCII 头原样返回（快速短路）。
+     */
+    private static String safeHeaderValue(String v) {
+        boolean ascii = true;
+        for (int i = 0; i < v.length(); i++) {
+            int c = v.charAt(i);
+            if (c < 32 || c > 126) { ascii = false; break; }
+        }
+        if (ascii) return v;
+        StringBuilder sb = new StringBuilder(v.length() + 16);
+        for (int i = 0; i < v.length(); ) {
+            int cp = v.codePointAt(i);
+            if (cp == 9 || (cp >= 32 && cp < 127)) {
+                sb.append((char) cp);
+            } else {
+                for (byte b : new String(Character.toChars(cp)).getBytes(StandardCharsets.UTF_8)) {
+                    sb.append('%').append(String.format("%02X", b));
+                }
+            }
+            i += Character.charCount(cp);
+        }
+        return sb.toString();
+    }
+
     public static HttpResult fetch(String url, String method, Map<String, String> headers, String body, String charset) {
         String m = (method == null || method.trim().isEmpty()) ? "GET" : method.trim().toUpperCase(Locale.ROOT);
         Request.Builder rb = new Request.Builder().url(url);
@@ -164,14 +192,14 @@ public final class HttpFetcher {
         // 书源 Cookie 罐（enabledCookieJar）：域罐内 cookie 打底，WebView/显式头在后覆盖同名，
         // 对齐 legado mergeCookies（options 临时 cookie 优先）。仅标记开启时参与。
         if (cookieJar) cookieHeader = CookieJar.header(url, cookieHeader);
-        if (cookieHeader != null && !cookieHeader.isEmpty()) rb.header("Cookie", cookieHeader);
+        if (cookieHeader != null && !cookieHeader.isEmpty()) rb.header("Cookie", safeHeaderValue(cookieHeader));
         if (headers != null) {
             for (Map.Entry<String, String> e : headers.entrySet()) {
                 if (e.getKey() == null || e.getValue() == null) continue;
                 // 内部标记不发给站点；Cookie 已统一组装，避免逐头覆盖丢失罐内条目
                 if ("CookieJar".equalsIgnoreCase(e.getKey())) continue;
                 if ("Cookie".equalsIgnoreCase(e.getKey())) continue;
-                rb.header(e.getKey(), e.getValue());
+                rb.header(e.getKey(), safeHeaderValue(e.getValue()));
             }
         }
         if (body != null) {

@@ -10,6 +10,7 @@ import org.mozilla.javascript.NativeObject;
 import org.mozilla.javascript.Wrapper;
 
 import java.io.ByteArrayOutputStream;
+import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.text.SimpleDateFormat;
@@ -63,6 +64,10 @@ public class JsExtensions {
     /** 对齐 java-api.js#parseSourceHeaders 的缺省 UA */
     private static final String DEFAULT_UA = "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 "
             + "(KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36";
+
+    /** java.androidId() 的进程内缓存与持久化键（取不到系统 ANDROID_ID 时保证 deviceid 稳定） */
+    private static volatile String ANDROID_ID = null;
+    private static final String ANDROID_ID_KEY = "legado.androidId";
 
     /** 对齐 parseSourceHeaders 的 UA 宽松提取：/["']?UA["']?\s*[:=]\s*["']([^"']+)["']/ */
     private static final Pattern UA_IN_HEADER =
@@ -452,6 +457,15 @@ public class JsExtensions {
             this.codeV = code;
         }
 
+        /**
+         * 对齐 legado Connection.Response.body()：与同名 public 字段 body 共存时，Rhino
+         * JavaMembers 返回 FieldAndMethods —— JS 侧 {@code .body} 直读字段、{@code .body()}
+         * 调方法，两种社区写法都保留（聚合书库 exploreUrl 用 java.connect(...).body()）。
+         */
+        public String body() {
+            return body;
+        }
+
         public ConnectResult raw() {
             return this;
         }
@@ -820,6 +834,11 @@ public class JsExtensions {
             if (key != null) MEM.remove(key);
         }
 
+        /** 对齐 legado CacheManager.delete(key)：社区源 cache.delete('kkmh')（快看漫画目录） */
+        public void delete(String key) {
+            deleteMemory(key);
+        }
+
         public Object get(String key) {
             return getFromMemory(key);
         }
@@ -1164,6 +1183,118 @@ public class JsExtensions {
     /** 对齐 legado JsExtensionsCommon#strToBytes：字符串 → UTF-8 字节数组（书源 AES 密钥构造用） */
     public static byte[] strToBytes(Object str) {
         return String.valueOf(str == null ? "" : str).getBytes(StandardCharsets.UTF_8);
+    }
+
+    /** 对齐 legado JsExtensionsCommon#bytesToStr(bytes)：默认 UTF-8 解码 */
+    public String bytesToStr(Object bytes) {
+        return bytesToStr(bytes, "UTF-8");
+    }
+
+    /**
+     * 对齐 legado JsExtensionsCommon#bytesToStr(bytes, charset)：
+     * 书源 AES 解密链 java.base64DecodeToByteArray → cipher.decrypt → 本方法转字符串。
+     * Rhino LiveConnect 回传的字节序列可能是 byte[] / NativeJavaArray / JS Array，统一收口。
+     */
+    public String bytesToStr(Object bytes, Object charset) {
+        byte[] arr = asByteArray(bytes);
+        if (arr == null) return "";
+        Charset cs = StandardCharsets.UTF_8;
+        String name = charset == null ? "" : String.valueOf(charset).trim();
+        if (!name.isEmpty()) {
+            try {
+                cs = Charset.forName(name);
+            } catch (Exception ignored) {
+                // 未知字符集回退 UTF-8（书源常写 ISO-8859-1 / GBK，均在 Android 支持范围内）
+            }
+        }
+        return new String(arr, cs);
+    }
+
+    /** 字节序列入参归一：Java byte[]、Rhino NativeJavaArray、JS Array、hex 字符串、Latin-1 字符串 */
+    private static byte[] asByteArray(Object v) {
+        if (v == null) return null;
+        if (v instanceof byte[]) return (byte[]) v;
+        if (v instanceof org.mozilla.javascript.NativeJavaArray) {
+            Object u = ((org.mozilla.javascript.NativeJavaArray) v).unwrap();
+            return u instanceof byte[] ? (byte[]) u : null;
+        }
+        if (v instanceof NativeArray) {
+            NativeArray a = (NativeArray) v;
+            byte[] out = new byte[(int) a.getLength()];
+            for (int i = 0; i < out.length; i++) {
+                Object e = a.get(i, a);
+                out[i] = e instanceof Number ? ((Number) e).byteValue() : 0;
+            }
+            return out;
+        }
+        String s = String.valueOf(v);
+        if (s.isEmpty()) return null;
+        // String 入参：hex 优先（与 SymmetricCrypto.decrypt 的字节入参语义一致）
+        if (s.matches("(?i)^[0-9a-fA-F]+$")) return hexDecodeToByteArray(s);
+        return s.getBytes(StandardCharsets.ISO_8859_1);
+    }
+
+    /**
+     * 对齐 legado JsExtensionsCommon#getWebViewUA：真机取系统 WebView UA
+     * （WebSettings.getDefaultUserAgent），桌面 harness / 无 WebView 环境回退 DEFAULT_UA。
+     * 走反射是为了不给 desktop-harness 的 android.webkit 桩增加编译期方法依赖。
+     */
+    public String getWebViewUA() {
+        try {
+            Object ua = Class.forName("android.webkit.WebSettings")
+                    .getMethod("getDefaultUserAgent", android.content.Context.class)
+                    .invoke(null, appContext());
+            if (ua != null && !String.valueOf(ua).trim().isEmpty()) return String.valueOf(ua);
+        } catch (Throwable ignored) {
+            // 无 WebView 能力：走缺省 UA
+        }
+        return DEFAULT_UA;
+    }
+
+    /**
+     * 对齐 legado JsExtensionsCommon#androidId：系统 Settings.Secure.ANDROID_ID；
+     * 插件无 ContentResolver 权限时生成一次 16 位 ID 并持久化，保证书源 deviceid 参数稳定。
+     */
+    public String androidId() {
+        if (ANDROID_ID != null && !ANDROID_ID.isEmpty()) return ANDROID_ID;
+        synchronized (JsExtensions.class) {
+            if (ANDROID_ID != null && !ANDROID_ID.isEmpty()) return ANDROID_ID;
+            String id = null;
+            try {
+                id = com.github.catvod.utils.Cache.getString(ANDROID_ID_KEY, null);
+            } catch (Throwable ignored) {
+                // 宿主 CacheManager 未注入（桌面 harness）
+            }
+            if (id == null || id.isEmpty()) {
+                id = systemAndroidId();
+                if (id == null || id.isEmpty()) {
+                    id = UUID.randomUUID().toString().replace("-", "").substring(0, 16);
+                }
+                try {
+                    com.github.catvod.utils.Cache.put(ANDROID_ID_KEY, id);
+                } catch (Throwable ignored) {
+                    // 持久化失败时进程内静态缓存仍保证本次运行稳定
+                }
+            }
+            ANDROID_ID = id;
+            return id;
+        }
+    }
+
+    /** 反射取 Settings.Secure.ANDROID_ID，避免引入 ContentResolver 编译期依赖 */
+    private static String systemAndroidId() {
+        try {
+            android.content.Context ctx = appContext();
+            if (ctx == null) return null;
+            Object cr = ctx.getClass().getMethod("getContentResolver").invoke(ctx);
+            if (cr == null) return null;
+            Object v = Class.forName("android.provider.Settings$Secure")
+                    .getMethod("getString", Class.forName("android.content.ContentResolver"), String.class)
+                    .invoke(null, cr, "android_id");
+            return v == null ? null : String.valueOf(v);
+        } catch (Throwable ignored) {
+            return null;
+        }
     }
 
     /** 对齐 java-api.js#hexDecodeToString：hex → utf-8 字符串（非法/奇长/空返回 null） */

@@ -168,6 +168,53 @@ public final class JsEngine {
                                 + "source.getKey = function(){ return (this.bookSourceUrl || this.get) ? (this.bookSourceUrl || this.get('bookSourceUrl') || '') : ''; };"
                                 + "source.getKey2 = source.getKey; } } catch (e) {}",
                         "legado-glue.js", 1, null);
+                // result 双形态：RuleAnalyzer 把 HTML 首段绑成 jsoup Element（供
+                // result.select(...).first() 使用），但社区源同样高频裸用
+                // result.match/replace/split（官方 evalJS 的 result 是文本）。
+                // 这里包一层 JS String 对象：字符串方法走 String.prototype，
+                // Element 方法代理回原对象，两种写法同时可用。
+                // 内容优先用 __resultText（原始响应文本），避免 jsoup outerHtml
+                // 重新格式化后改变正则匹配结果。
+                cx.evaluateString(scope,
+                        "(function(){ try {"
+                                + " var r = result;"
+                                // 注意：Rhino 对顶层 NativeJavaObject 执行 typeof r 会抛
+                                // 「Document 类型的 JavaScript 值无效」，只能按属性判断。
+                                + " if (typeof r.outerHtml !== 'undefined' && typeof r.match === 'undefined') {"
+                                + "  var s = (typeof __resultText === 'string' && __resultText.length) ? __resultText : String(r);"
+                                + "  var w = new String(s);"
+                                + "  ['select','selectFirst','attr','text','html','outerHtml','children',"
+                                + "  'child','getElementsByTag','getAllElements','parent','parents',"
+                                + "  'nextElementSibling','previousElementSibling','first','last','size',"
+                                + "  'hasAttr','hasClass','absUrl','id','className','tagName','data','val']"
+                                + "  .forEach(function(n){"
+                                + "   if (typeof r[n] !== 'undefined') {"
+                                + "    w[n] = function(){ return r[n].apply(r, arguments); };"
+                                + "   }"
+                                + "  });"
+                                + "  w.__element = r;"
+                                + "  result = w;"
+                                + " }"
+                                + "} catch(e){} })();",
+                        "legado-result-glue.js", 1, null);
+                // JSON 内容的首段 result 是对象树（NativeObject），社区源同样会裸用
+                // result.replace(/null/g,'') 这类字符串方法（乐乎文章 ruleExplore.bookList）。
+                // 对象本身保持可点访问/JSONPath 求值，只补挂字符串方法代理到原始响应文本。
+                // 独立 try/catch：Rhino 对 Java 对象做 typeof 会抛异常，不能影响上一段胶水。
+                cx.evaluateString(scope,
+                        "(function(){ try {"
+                                + " var r = result;"
+                                + " if (r && typeof r === 'object' && typeof r.replace === 'undefined'"
+                                + " && typeof __resultText === 'string' && __resultText.length) {"
+                                + "  ['match','replace','split','substring','substr','indexOf','lastIndexOf',"
+                                + "  'slice','trim','toLowerCase','toUpperCase','charAt','concat',"
+                                + "  'includes','startsWith','endsWith']"
+                                + "  .forEach(function(n){"
+                                + "   try { r[n] = function(){ return String.prototype[n].apply(__resultText, arguments); }; } catch(e){}"
+                                + "  });"
+                                + " }"
+                                + "} catch(e){} })();",
+                        "legado-result-json-glue.js", 1, null);
             }
             return expand(script.exec(cx, scope));
         });

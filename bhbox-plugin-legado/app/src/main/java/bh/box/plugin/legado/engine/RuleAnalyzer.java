@@ -1169,6 +1169,9 @@ public final class RuleAnalyzer {
             if (e.getValue() != null) b.put(e.getKey(), e.getValue());
         }
         b.put("result", resultBinding);
+        // JsEngine result 双形态胶水用：原始响应文本优先于 jsoup outerHtml（后者会
+        // 补全 head / 格式化，可能改变 result.match(/__NUXT__.../) 这类正则的命中）
+        b.put("__resultText", rootContent == null ? "" : getRaw(rootContent));
         b.put("root", rootContent);
         Map<String, Object> source = mapOrEmpty(ctx.get("source"));
         // source/book 桥：Map 形态无方法面（source.getVariable()/book.putCustomVariable() 等

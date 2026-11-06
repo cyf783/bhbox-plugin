@@ -26,6 +26,7 @@ import java.util.concurrent.Future;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import bh.box.plugin.legado.engine.BookBridge;
 import bh.box.plugin.legado.engine.CookieJar;
 import bh.box.plugin.legado.engine.HttpFetcher;
 import bh.box.plugin.legado.engine.JsEngine;
@@ -1244,6 +1245,13 @@ public final class T4Actions {
             }
         }
         if (reverse) Collections.reverse(chapters); // - 前缀：源目录页倒排，翻正
+        // book.setReverseToc(true)：书源 JS 在详情页显式要求目录倒序（言情小说等），
+        // 桥对象由 RuleAnalyzer.buildJsBindings 挂在 book 的 __bridge__ 上
+        Object bookObj = ctx.get("book");
+        Object bookBridge = bookObj instanceof Map ? ((Map<?, ?>) bookObj).get("__bridge__") : null;
+        if (bookBridge instanceof BookBridge && ((BookBridge) bookBridge).isReverseToc()) {
+            Collections.reverse(chapters);
+        }
         if (!chapters.isEmpty()) {
             if (tocCache.size() >= MAX_TOC_CACHE) {
                 String oldest = tocCache.keySet().iterator().next();
@@ -1475,7 +1483,7 @@ public final class T4Actions {
         String cleaned = applyReplaceRegex(text, rule.get("replaceRegex"), ctx);
         // 漫画源（bookSourceType 2）→ pics:// 协议（宿主 ComicReadView）；提取失败落 novel:// 文字兜底。
         // 必须在 HTML 净化前分发：净化剥除全部标签会连同 <img src=...> 一起剥掉，漫画提取不到图
-        if (isComic) return comicResponse(ctx, cleaned);
+        if (isComic) return comicResponse(ctx, cleaned, body);
         // 正文 HTML 段净化（@html 规则产物含 <p>/<br>——宿主 novel:// 视图为纯文本流，
         // 阅读 App 端由 HtmlFormatter 承担同等净化）：块级标签→换行、其余标签剥除、实体解码
         if (cleaned.indexOf('<') >= 0) {
@@ -1634,52 +1642,246 @@ public final class T4Actions {
         return sb.toString();
     }
 
-    /** 漫画正文 <img src> 提取（cap 防异常超长章节） */
-    private static final Pattern IMG_SRC =
-            Pattern.compile("<img[^>]*\\ssrc=[\"']?([^\"'\\s>]+)", Pattern.CASE_INSENSITIVE);
+    /** 漫画正文 <img> 标签（cap 防异常超长章节） */
+    private static final Pattern IMG_TAG =
+            Pattern.compile("<img\\b[^>]*>", Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
+    /** img 标签上的 src= 属性起始（引号可选） */
+    private static final Pattern SRC_ATTR =
+            Pattern.compile("\\ssrc\\s*=\\s*([\"']?)", Pattern.CASE_INSENSITIVE);
     /** 无 img 标签时的退路：规则产物为裸 http(s) URL 行（书源 JS 直出列表形态） */
     private static final Pattern BARE_URL_LINE =
             Pattern.compile("(?m)^\\s*(https?://\\S{8,})\\s*$");
+    /** 内嵌图片补全：DOM 已抽到这么多张就认为页面已渲染完整，不再补（避免误抓同目录推荐图） */
+    private static final int EMBEDDED_MIN_DOM_IMAGES = 8;
+    private static final Pattern ANY_URL =
+            Pattern.compile("https?://[^\\s\"'<>\\\\]+", Pattern.CASE_INSENSITIVE);
+    /** .webp-c.w750 / .jpg?x=1 / .png 这类图片地址（扩展名后允许尺寸后缀或 query） */
+    private static final Pattern IMG_EXT =
+            Pattern.compile("\\.(?:jpe?g|png|webp|gif|bmp)(?:[?#-]|$)", Pattern.CASE_INSENSITIVE);
+    private static final Pattern UNICODE_ESC = Pattern.compile("\\\\u([0-9a-fA-F]{4})");
+
+    /**
+     * 提取 img 标签的 src 属性值。
+     * legado 书源常生成 &lt;img src="URL,{"headers":{...}}"&gt;——JSON 里的双引号未转义，
+     * 按标准 HTML 属性解析会在第一个引号处截断，只留下 "URL,{" 脏尾巴（宿主取图必然失败）。
+     * 这里用 ",{" + 花括号配对定位真正的结束引号，兼容这种非标准嵌套引号。
+     */
+    private static String imgSrcOf(String tag) {
+        Matcher m = SRC_ATTR.matcher(tag);
+        if (!m.find()) return "";
+        int start = m.end();
+        String q = m.group(1);
+        if (q.isEmpty()) {
+            int e = start;
+            while (e < tag.length() && !Character.isWhitespace(tag.charAt(e)) && tag.charAt(e) != '>') e++;
+            return tag.substring(start, e).trim();
+        }
+        char quote = q.charAt(0);
+        int comma = tag.indexOf(",{", start);
+        if (comma > start) {
+            int end = braceEnd(tag, comma + 1);
+            if (end > comma) {
+                int close = tag.indexOf(quote, end + 1);
+                return tag.substring(start, close >= 0 ? close : tag.length()).trim();
+            }
+        }
+        int first = tag.indexOf(quote, start);
+        return (first >= 0 ? tag.substring(start, first) : tag.substring(start)).trim();
+    }
+
+    /** 从 open 处的 '{' 起配对扫描（忽略引号内花括号），返回配对 '}' 下标；失败 -1 */
+    private static int braceEnd(String s, int open) {
+        int depth = 0;
+        char quote = 0;
+        for (int i = open; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (quote != 0) {
+                if (c == '\\') i++;
+                else if (c == quote) quote = 0;
+                continue;
+            }
+            if (c == '"' || c == '\'') {
+                quote = c;
+                continue;
+            }
+            if (c == '{') depth++;
+            else if (c == '}' && depth > 0 && --depth == 0) return i;
+        }
+        return -1;
+    }
+
+    /** 宿主 pics:// 只认识这三种单图请求头后缀（PlayFragment#handleComicContent） */
+    private static String canonicalPicHeader(String key) {
+        if (key.equalsIgnoreCase("Cookie")) return "Cookie";
+        if (key.equalsIgnoreCase("Referer")) return "Referer";
+        if (key.equalsIgnoreCase("User-Agent")) return "User-Agent";
+        return null;
+    }
+
+    private static String headerOf(Map<String, String> headers, String canonical) {
+        if (headers == null) return null;
+        for (Map.Entry<String, String> e : headers.entrySet()) {
+            if (canonical.equals(canonicalPicHeader(e.getKey()))) return e.getValue();
+        }
+        return null;
+    }
+
+    /**
+     * 懒加载漫画站补图：SSR 往往只渲染首屏几张 &lt;img data-src&gt;，完整图列表以
+     * window.__NUXT__ / __NEXT_DATA__ 之类内嵌数据留在页面脚本里（URL 常被写成 \u002F 转义）。
+     * 这里**不执行站点脚本**，只还原 Unicode 转义、按「与首图同章节目录」提取图片 URL，
+     * 按文件名去重后补到 DOM 结果之后（DOM 首屏图的顺序就是正确阅读顺序的开头）。
+     */
+    private static List<String> collectEmbeddedImages(String rawHtml, List<String> seedUrls) {
+        List<String> out = new ArrayList<>();
+        if (rawHtml == null || rawHtml.isEmpty() || seedUrls.isEmpty()
+                || seedUrls.size() >= EMBEDDED_MIN_DOM_IMAGES) return out;
+        String seed = seedUrls.get(0);
+        int q = seed.indexOf('?');
+        String seedPath = q >= 0 ? seed.substring(0, q) : seed;
+        int slash = seedPath.lastIndexOf('/');
+        int scheme = seedPath.indexOf("://");
+        if (slash < 0 || scheme < 0) return out;
+        String seedDir = seedPath.substring(0, slash);
+        int hostEnd = seedDir.indexOf('/', scheme + 3);
+        String host = hostEnd < 0 ? seedDir : seedDir.substring(0, hostEnd);
+        int parentSlash = seedDir.lastIndexOf('/');
+        String seedParent = parentSlash > host.length() ? seedDir.substring(0, parentSlash) : "";
+        String rel = seedParent.length() > host.length() ? seedParent.substring(host.length()) : "";
+        int segs = 0;
+        for (int i = 0; i < rel.length(); i++) if (rel.charAt(i) == '/') segs++;
+        // 路径够深时放宽到父目录（同章节不同批次目录，如 /image/c852866/261008 与 /261021）；
+        // 否则只认同目录，避免把站点 logo / 其它作品封面一并抓进来
+        String prefix = segs >= 2 ? seedParent : seedDir;
+
+        Matcher ue = UNICODE_ESC.matcher(rawHtml);
+        StringBuffer sb = new StringBuffer();
+        while (ue.find()) {
+            ue.appendReplacement(sb, Matcher.quoteReplacement(
+                    String.valueOf((char) Integer.parseInt(ue.group(1), 16))));
+        }
+        ue.appendTail(sb);
+        String s = sb.toString().replace("&amp;", "&");
+
+        Set<String> seen = new HashSet<>();
+        for (String u : seedUrls) seen.add(fileKey(u));
+        Matcher m = ANY_URL.matcher(s);
+        while (m.find() && seedUrls.size() + out.size() < 500) {
+            String u = m.group().replaceAll("[,\"';)]+$", "");
+            if (!u.startsWith(prefix)) continue;
+            int qq = u.indexOf('?');
+            String path = qq >= 0 ? u.substring(0, qq) : u;
+            if (!IMG_EXT.matcher(path).find()) continue;
+            if (!seen.add(fileKey(u))) continue;
+            out.add(u);
+        }
+        return out;
+    }
+
+    /** URL 去重键：去 query 后的文件名（同图不同签名只留一张） */
+    private static String fileKey(String url) {
+        int q = url.indexOf('?');
+        String p = q >= 0 ? url.substring(0, q) : url;
+        int s = p.lastIndexOf('/');
+        return s >= 0 ? p.substring(s + 1) : p;
+    }
 
     /**
      * 漫画响应：pics:// 协议（宿主 PlayFragment#handleComicContent → ComicReadView）。
      * 有意偏差：node 版对 type=2 同样落 novelResponse——宿主小说视图不渲染 &lt;img&gt;，
      * 漫画源不可读；Mobile 壳已有 pics:// 消费链路，此处按书源类型分发。
      * - 图片提取：&lt;img src&gt; 优先，退裸 URL 行；相对地址对章节 URL 绝对化，HTML 实体解码；
-     * - 提取为空（正文是文字说明/错误信息）→ 落 novelResponse 原行为；
-     * - header 传源默认头（对齐 audioResponse），宿主会把 Cookie/Referer/UA 追加到图片 URL。
+     * - src 支持 legado 的 "URL,{options}" 尾巴：URL 段只留纯地址，options.headers 并入响应头，
+     *   宿主会给每张图追加 @Cookie/@Referer/@User-Agent；各图头不一致时给差异图单独加后缀；
+     * - 懒加载站点：DOM 图片偏少时从原始页面 HTML 的内嵌数据补图（见 collectEmbeddedImages）；
+     * - 提取为空（正文是文字说明/错误信息）→ 落 novelResponse 原行为。
      */
-    private static Map<String, Object> comicResponse(Map<String, Object> ctx, String content) {
+    private static Map<String, Object> comicResponse(Map<String, Object> ctx, String content,
+                                                     String rawHtml) {
         List<String> urls = new ArrayList<>();
+        List<Map<String, String>> imgHeaders = new ArrayList<>();
+        Map<String, Map<String, String>> optCache = new LinkedHashMap<>();
+        String base = strOf(ctx.get("baseUrl"));
         if (content != null && !content.isEmpty()) {
-            String base = strOf(ctx.get("baseUrl"));
-            Matcher m = IMG_SRC.matcher(content);
+            Matcher m = IMG_TAG.matcher(content);
             while (m.find() && urls.size() < 500) {
-                String u = RuleAnalyzer.unescapeHtml(m.group(1)).trim();
-                String abs = absUrl(u, base);
-                if (abs.startsWith("http") && !urls.contains(abs)) urls.add(abs);
+                String v = imgSrcOf(m.group()).trim();
+                if (v.isEmpty()) continue;
+                String[] parts = UrlRule.splitUrlRule(v);
+                Map<String, String> h = null;
+                if (parts[1] != null) {
+                    if (!optCache.containsKey(parts[1])) {
+                        optCache.put(parts[1], UrlRule.parseUrlRule(v).options.headers);
+                    }
+                    h = optCache.get(parts[1]);
+                }
+                // 只在 URL 段解码 HTML 实体，避免破坏 options JSON 里的 &quot; 等字面量
+                String abs = absUrl(RuleAnalyzer.unescapeHtml(parts[0]), base);
+                if (abs.startsWith("http") && !urls.contains(abs)) {
+                    urls.add(abs);
+                    imgHeaders.add(h);
+                }
             }
             if (urls.isEmpty()) {
                 Matcher b = BARE_URL_LINE.matcher(content);
                 while (b.find() && urls.size() < 500) {
-                    String abs = absUrl(b.group(1).trim(), base);
-                    if (abs.startsWith("http") && !urls.contains(abs)) urls.add(abs);
+                    String[] parts = UrlRule.splitUrlRule(b.group(1).trim());
+                    String abs = absUrl(RuleAnalyzer.unescapeHtml(parts[0]), base);
+                    if (abs.startsWith("http") && !urls.contains(abs)) {
+                        urls.add(abs);
+                        imgHeaders.add(null);
+                    }
                 }
             }
         }
+        // 懒加载站点补图：新增 URL 没有单图 options，imgHeaders 同步补 null 保持下标对齐
+        for (String u : collectEmbeddedImages(rawHtml, urls)) {
+            urls.add(u);
+            imgHeaders.add(null);
+        }
         if (urls.isEmpty()) return novelResponse(content, "");
+
+        // 图片级请求头：全图一致 → 直接并入响应 header；有差异 → 基准头并入 header，
+        // 与基准不同的 Cookie/Referer/UA 单独写成 @Key=value 后缀（宿主识别这三种）
+        Map<String, String> merged = JsExtensions.parseSourceHeaders(ctx.get("source"), ctx);
+        merged = merged == null ? new LinkedHashMap<String, String>() : new LinkedHashMap<>(merged);
+        Map<String, String> baseline = new LinkedHashMap<>();
+        for (Map<String, String> h : imgHeaders) if (h != null) baseline.putAll(h);
+        boolean allSame = true;
+        for (Map<String, String> h : imgHeaders) {
+            if (h == null || h.isEmpty()) {
+                if (!baseline.isEmpty()) allSame = false;
+            } else if (!h.equals(baseline)) {
+                allSame = false;
+            }
+        }
+        for (Map.Entry<String, String> e : baseline.entrySet()) {
+            String canon = canonicalPicHeader(e.getKey());
+            merged.put(canon != null ? canon : e.getKey(), e.getValue());
+        }
+
         StringBuilder pic = new StringBuilder("pics://");
         for (int i = 0; i < urls.size(); i++) {
             if (i > 0) pic.append("&&");
             pic.append(urls.get(i));
+            Map<String, String> h = imgHeaders.get(i);
+            if (!allSame && h != null) {
+                for (Map.Entry<String, String> e : h.entrySet()) {
+                    String canon = canonicalPicHeader(e.getKey());
+                    String own = e.getValue();
+                    if (canon == null || own == null || own.equals(headerOf(baseline, canon))) continue;
+                    // GlideHelper 以 '@' 切分后缀，值里带 @/换行会被截断，跳过让响应级头兜底
+                    if (own.indexOf('@') >= 0 || own.indexOf('\n') >= 0 || own.indexOf('\r') >= 0) continue;
+                    pic.append('@').append(canon).append('=').append(own);
+                }
+            }
         }
         LinkedHashMap<String, Object> out = new LinkedHashMap<>();
         out.put("url", pic.toString());
         out.put("parse", 0);
         out.put("jx", 0);
         out.put("flag", "漫画");
-        Map<String, String> merged = JsExtensions.parseSourceHeaders(ctx.get("source"), ctx);
-        if (merged != null && !merged.isEmpty()) out.put("header", merged);
+        if (!merged.isEmpty()) out.put("header", merged);
         return out;
     }
 
