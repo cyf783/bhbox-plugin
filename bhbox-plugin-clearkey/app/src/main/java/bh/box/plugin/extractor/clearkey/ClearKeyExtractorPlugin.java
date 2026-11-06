@@ -59,6 +59,7 @@ public class ClearKeyExtractorPlugin implements IExtractorPlugin {
 
     @Override
     public void init() {
+        cleanOrphanCache();
     }
 
     @Override
@@ -279,5 +280,21 @@ public class ClearKeyExtractorPlugin implements IExtractorPlugin {
         File dir = new File(com.github.catvod.Init.context().getCacheDir(), "clearkey");
         if (!dir.exists()) dir.mkdirs();
         return dir;
+    }
+
+    /**
+     * 清理孤儿缓存：entries 是纯内存态，进程启动（install/init）时必然为空，
+     * clearkey 目录下任何残留文件都来自上次进程（含被系统杀掉的异常退出），直接删除。
+     */
+    private static void cleanOrphanCache() {
+        try {
+            File[] files = cacheDir().listFiles();
+            if (files == null) return;
+            for (File f : files) {
+                if (f.isFile() && !f.delete()) LOG.e(TAG, "孤儿缓存删除失败: " + f.getName());
+            }
+        } catch (Exception e) {
+            LOG.e(TAG, "孤儿缓存清理异常: " + e.getMessage());
+        }
     }
 }

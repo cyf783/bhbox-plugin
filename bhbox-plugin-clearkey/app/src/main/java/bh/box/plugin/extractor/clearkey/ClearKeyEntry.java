@@ -156,11 +156,6 @@ final class ClearKeyEntry {
         }
     }
 
-    /** 已完成（READY 且文件存在）则直接复用 */
-    boolean isReady() {
-        return status == STATUS_READY && cacheFile.isFile() && cacheFile.length() > 0;
-    }
-
     void launch() {
         Thread t = new Thread(this::run, "ClearKeyProxy-dl-" + id);
         t.setDaemon(true);

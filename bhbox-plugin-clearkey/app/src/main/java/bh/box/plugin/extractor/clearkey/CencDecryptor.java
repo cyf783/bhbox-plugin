@@ -78,7 +78,7 @@ final class CencDecryptor {
     static final class Task {
         final long offset;
         final int size;
-        final byte[] iv;        // 已按 16 字节右侧补零？否——原始 IV，解密时统一补零
+        final byte[] iv;        // 原始 IV（长度 = per-sample IV size 或 constant IV 长度），解密时统一补零到 16 字节
         final byte[] key;
         final int[] subClear;   // null = 整段加密（无 subsample）
         final int[] subEncrypted;
@@ -207,6 +207,10 @@ final class CencDecryptor {
             if (data.length < 8) throw new EOFException("senc 数据过短");
             int fullAtom = readInt(data, p);
             p += 4;
+            int version = (fullAtom >>> 24) & 0xFF;
+            if (version > 1) {
+                throw new IOException("不支持的 senc version: " + version);
+            }
             int flags = fullAtom & 0x00FFFFFD;
             if (flags != 0) {
                 throw new IOException("不支持的 senc flags: 0x" + Integer.toHexString(fullAtom & 0x00FFFFFF));
@@ -215,6 +219,11 @@ final class CencDecryptor {
             sencSampleCount = readInt(data, p);
             p += 4;
             if (sencSampleCount < 0) throw new IOException("senc sample 数异常: " + sencSampleCount);
+            if (version == 1 && tenc.perSampleIvSize == 0) {
+                // version 1 且无 per-sample IV 时每个 sample 前还带 16B KID，需额外跳过——
+                // 未实现该布局，显式拒绝而不是静默解析错位
+                throw new IOException("不支持 senc version 1 + 无 per-sample IV 的布局");
+            }
             if (tenc.perSampleIvSize > 0) sampleIvs = new byte[sencSampleCount][];
             if (subsampleEncryption) {
                 subsampleClear = new int[sencSampleCount][];

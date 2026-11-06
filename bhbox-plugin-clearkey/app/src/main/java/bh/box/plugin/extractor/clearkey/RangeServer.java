@@ -31,7 +31,6 @@ final class RangeServer {
 
     private static final String TAG = "ClearKeyProxy";
     private static final String CONTENT_TYPE = "video/mp4";
-    private static final int MAX_ENTRIES = 16;
 
     private final ConcurrentHashMap<String, ClearKeyEntry> entries;
     private ServerSocket server;
