@@ -280,17 +280,38 @@ public class JsExtensions {
      * 对齐 legado newCallStrResponse(option?.retry ?: 0) 的重试语义：网络失败（握手/IO/非 2xx 空体）
      * 时整体重试至多 retry 次；retry<=0 即单次。
      */
-    private static HttpFetcher.HttpResult fetchWithRetry(String url, String method, Map<String, String> headers,
-                                                         String body, String charset, int retry) {
+    private HttpFetcher.HttpResult fetchWithRetry(String url, String method, Map<String, String> headers,
+                                                  String body, String charset, int retry) {
         Exception last = null;
+        // 复制一份，避免把内部标记写回调用方复用的头 Map
+        Map<String, String> h = headers != null
+                ? new LinkedHashMap<String, String>(headers) : new LinkedHashMap<String, String>();
+        // 对齐 legado AnalyzeUrl：cookie jar 书源的请求头打内部标记，由 HttpFetcher 组装/落罐。
+        // 覆盖 java.ajax/post/connect/head/ajaxAll 全部出口——OM_pass 过盾的 java.post 响应
+        // Set-Cookie 必须落到罐里，后续搜索请求才会带上盾 cookie。
+        if (sourceCookieJar()) h.put("CookieJar", "1");
         for (int attempt = 0; attempt <= Math.max(0, retry); attempt++) {
             try {
-                return HttpFetcher.fetch(url, method, headers, body, charset);
+                return HttpFetcher.fetch(url, method, h, body, charset);
             } catch (Exception e) {
                 last = e;
             }
         }
         throw last instanceof RuntimeException ? (RuntimeException) last : new RuntimeException(last);
+    }
+
+    /** 书源 enabledCookieJar 判定（source 可能是裸 Map 或 SourceBridge 桥） */
+    private boolean sourceCookieJar() {
+        Object src = bindings.get("source");
+        Object v = null;
+        if (src instanceof Map) {
+            v = ((Map<?, ?>) src).get("enabledCookieJar");
+        } else if (src instanceof SourceBridge) {
+            v = ((SourceBridge) src).getProperty("enabledCookieJar");
+        }
+        if (v == null) return false;
+        if (v instanceof Boolean) return (Boolean) v;
+        return String.valueOf(v).trim().equalsIgnoreCase("true");
     }
 
     /** legado UrlOption.retry（Int?）等价：null/负值归 0 */
@@ -343,7 +364,8 @@ public class JsExtensions {
         private final String finalUrl;
         private final String requestUrl;
 
-        StrResponse(String body, int code, Map<String, String> headers, String finalUrl, String requestUrl) {
+        /** public：T4Actions.runLoginCheckJs 需跨包构造 result 绑定（对齐 legado strResponse 工厂） */
+        public StrResponse(String body, int code, Map<String, String> headers, String finalUrl, String requestUrl) {
             this.bodyStr = body;
             this.codeV = code;
             this.headersMap = headers;
@@ -1139,6 +1161,11 @@ public class JsExtensions {
         return out;
     }
 
+    /** 对齐 legado JsExtensionsCommon#strToBytes：字符串 → UTF-8 字节数组（书源 AES 密钥构造用） */
+    public static byte[] strToBytes(Object str) {
+        return String.valueOf(str == null ? "" : str).getBytes(StandardCharsets.UTF_8);
+    }
+
     /** 对齐 java-api.js#hexDecodeToString：hex → utf-8 字符串（非法/奇长/空返回 null） */
     public String hexDecodeToString(Object hex) {
         String s = hex == null ? "" : String.valueOf(hex).trim();
@@ -1227,25 +1254,31 @@ public class JsExtensions {
      */
     public static final class SymmetricCrypto {
         private final Cipher cipher;
+        private final SecretKeySpec key;
+        private final IvParameterSpec iv;
 
-        private SymmetricCrypto(String transformation, byte[] key, byte[] iv) {
+        private SymmetricCrypto(String transformation, byte[] keyBuf, byte[] ivBuf) {
             try {
                 String algo = transformation.contains("/") ? transformation.substring(0, transformation.indexOf('/')) : transformation;
                 this.cipher = Cipher.getInstance(transformation);
-                SecretKeySpec ks = new SecretKeySpec(key, algo);
-                if (iv != null) {
-                    cipher.init(Cipher.ENCRYPT_MODE, ks, new IvParameterSpec(iv));
-                } else {
-                    cipher.init(Cipher.ENCRYPT_MODE, ks);
-                }
+                this.key = new SecretKeySpec(keyBuf, algo);
+                this.iv = ivBuf != null ? new IvParameterSpec(ivBuf) : null;
+                init(Cipher.ENCRYPT_MODE);
             } catch (Exception e) {
                 throw new RuntimeException("createSymmetricCrypto failed: " + e.getMessage(), e);
             }
         }
 
+        /** 对齐 hutool：每次操作前按方向重新 init（同一实例可交替加/解密） */
+        private void init(int mode) throws Exception {
+            if (iv != null) cipher.init(mode, key, iv);
+            else cipher.init(mode, key);
+        }
+
         /** 加密 → 密文字节（对齐 hutool encrypt） */
         public byte[] encrypt(Object data) {
             try {
+                init(Cipher.ENCRYPT_MODE);
                 return cipher.doFinal(toBytes(data));
             } catch (Exception e) {
                 throw new RuntimeException("encrypt failed: " + e.getMessage(), e);
@@ -1274,6 +1307,7 @@ public class JsExtensions {
                         : base64DecodeBytes(s);
             }
             try {
+                init(Cipher.DECRYPT_MODE);
                 return cipher.doFinal(src);
             } catch (Exception e) {
                 throw new RuntimeException("decrypt failed: " + e.getMessage(), e);

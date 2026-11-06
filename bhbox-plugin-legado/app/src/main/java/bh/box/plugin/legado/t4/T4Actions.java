@@ -26,6 +26,7 @@ import java.util.concurrent.Future;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import bh.box.plugin.legado.engine.CookieJar;
 import bh.box.plugin.legado.engine.HttpFetcher;
 import bh.box.plugin.legado.engine.JsEngine;
 import bh.box.plugin.legado.engine.JsExtensions;
@@ -205,8 +206,68 @@ public final class T4Actions {
             // legado analyzeUrl：GET query 段按 option.charset 编码
             u = UrlRule.encodeUrlQuery(u, p.options.charset);
         }
+        // 书源 enabledCookieJar：打内部标记让 HttpFetcher 走 Cookie 罐（请求附加 + 响应落罐）。
+        // 标记大小写敏感由 HttpFetcher 判定并剥除，不发给站点。
+        Object jar = SourceManager.mapGet(ctx.get("source"), "enabledCookieJar");
+        boolean cookieJar = jar instanceof Boolean ? (Boolean) jar
+                : (jar != null && String.valueOf(jar).trim().equalsIgnoreCase("true"));
+        if (cookieJar) headers.put("CookieJar", "1");
         HttpFetcher.HttpResult r = HttpFetcher.fetch(u, method, headers, body, p.options.charset);
-        return r.body;
+        // 对齐 legado WebBook：响应交给书源 loginCheckJs 做登录/验证检测，用 JS 返回值替换响应。
+        // fetchPage 是 search/explore/detail/toc/content 五动作的唯一请求出口，一处接入即可。
+        String replaced = runLoginCheckJs(ctx, u, r);
+        return replaced != null ? replaced : r.body;
+    }
+
+    /**
+     * 执行书源 loginCheckJs（对齐 legado WebBook 各入口的 analyzeUrl.evalJS(checkJs, result)）：
+     * 拿到响应后执行，用 JS 返回值替换本次响应；**不自动重试**——legado 语义是过盾 cookie
+     * 落进 Cookie 罐后由下一次请求生效（首次搜索仍返回盾页，第二次才正常）。
+     *
+     * <p>关键点：书源 jsLib 必须前置。OmoFun 这类源的 loginCheckJs 直接裸调 jsLib 中定义的
+     * {@code OM_pass / OM_line / OM_toast}，漏拼会 ReferenceError，且被源自身 try/catch 吞掉，
+     * 表现为"搜索一直空、日志里什么都没有"。
+     *
+     * <p>绑定 {@code result}（StrResponse：body()/code()/header()/url()）、{@code source}
+     * （SourceBridge，支持 get/put 变量）、{@code java}（JsExtensions）、baseUrl/page/key/book。
+     * JS 抛异常或返回 undefined 时降级保留原响应（区别于 legado 的严格抛出）。
+     */
+    private static String runLoginCheckJs(Map<String, Object> ctx, String requestUrl,
+                                          HttpFetcher.HttpResult r) {
+        Object js = SourceManager.mapGet(ctx.get("source"), "loginCheckJs");
+        if (js == null) return null;
+        String script = String.valueOf(js).trim();
+        if (script.isEmpty()) return null;
+        try {
+            ensureBridges(ctx); // 幂等：把 __bridge__ 挂到 ctx.source
+            Map<String, Object> source = strMapOf(ctx.get("source"));
+            Map<String, Object> b = new LinkedHashMap<>();
+            // source 用桥：loginCheckJs 依赖 source.get('om_line') / source.put(...) 方法面，
+            // 裸 Map 注入 JS 后没有 get/put 方法。
+            b.put("source", source.get("__bridge__"));
+            b.put("java", ctx.get("java"));
+            b.put("result", new JsExtensions.StrResponse(r.body, r.code, r.headers, r.finalUrl, requestUrl));
+            b.put("baseUrl", ctx.get("baseUrl"));
+            b.put("page", ctx.get("page"));
+            b.put("key", ctx.get("key"));
+            b.put("book", ctx.get("book"));
+            // jsLib 前置，对齐 RuleAnalyzer/TemplateRenderer 的共享全局作用域语义
+            Object libObj = source.get("jsLib");
+            String lib = libObj instanceof String ? (String) libObj : "";
+            String code = lib.trim().isEmpty() ? script : lib + "\n;\n" + script;
+            Object out = JsEngine.eval(code, b);
+            // JsEngine.expand 会把返回的 StrResponse（NativeJavaObject → unwrap →
+            // String.valueOf）摊成 body 字符串，故此处拿到的是 String 而非 StrResponse；
+            // legado 的 StrResponse 本质就是 String，直接用返回值替换响应即可。
+            String replaced = out == null ? null : String.valueOf(out);
+            Log.i(TAG, "loginCheckJs [" + truncate(requestUrl, 80) + "] body "
+                    + r.body.length() + " -> " + (replaced == null ? r.body.length() : replaced.length())
+                    + " jar=" + CookieJar.debugDump());
+            return replaced;
+        } catch (Exception e) {
+            Log.w(TAG, "loginCheckJs failed: " + e.getMessage());
+            return null;
+        }
     }
 
     /** 对齐 t4/index.js#absUrl：URL 绝对化（legado getAbsoluteURL：javascript: 丢弃） */
@@ -842,7 +903,8 @@ public final class T4Actions {
         vod.put("vod_remarks", wordCount);
         vod.put("vod_content", !intro.isEmpty() ? intro : lastChapter);
         long stype0 = numOrZero(SourceManager.mapGet(source, "bookSourceType"));
-        vod.put("vod_play_from", stype0 == 1 ? "音频" : stype0 == 2 ? "漫画" : "正文");
+        vod.put("vod_play_from", stype0 == 1 ? "音频" : stype0 == 2 ? "漫画"
+                : stype0 == 4 ? "视频" : "正文");
         vod.put("vod_play_url", playUrl.toString());
         LinkedHashMap<String, Object> out = new LinkedHashMap<>();
         List<Object> l = new ArrayList<>();
@@ -1286,8 +1348,12 @@ public final class T4Actions {
         long stype = numOrZero(SourceManager.mapGet(source, "bookSourceType"));
         boolean isAudio = stype == 1;
         boolean isComic = stype == 2;
+        // 视频源（bookSourceType 4）：正文规则产物是 mp4/m3u8 直链，与音频同路（直链交宿主播放器）
+        boolean isVideo = stype == 4;
+        boolean isDirect = isAudio || isVideo;
         if (chapterUrl.isEmpty()) {
-            return isAudio ? audioResponse(source, "") : novelResponse("", "章节地址为空");
+            return isAudio ? audioResponse(source, "") : isVideo ? videoResponse(source, "")
+                    : novelResponse("", "章节地址为空");
         }
         // 章节上下文查回：detail/loadToc 缓存该书与章节对象（legado AnalyzeRule.chapter/book 绑定）
         String sk = SourceManager.strOrEmpty(SourceManager.mapGet(source, "bookSourceUrl")).trim();
@@ -1300,10 +1366,11 @@ public final class T4Actions {
         // **响应体**（data:;base64 源的响应体是 hex 编码的章节 URL，
         // ruleContent 里 java.hexDecodeToString(src) 还原真实地址依赖此绑定）
         Map<String, Object> rule = mapOrEmpty(SourceManager.mapGet(source, "ruleContent"));
-        // legado WebBook.getContentAwait：content 规则为空 → 章节链接即播放地址（音频源常态）
         Object contentRule = rule.get("content");
-        if (isAudio && (contentRule == null || String.valueOf(contentRule).trim().isEmpty())) {
-            return audioResponse(source, splitAudioUrl(ctx, chapterUrl));
+        if (isDirect && (contentRule == null || String.valueOf(contentRule).trim().isEmpty())) {
+            // legado WebBook.getContentAwait：content 规则为空 → 章节链接即播放地址（音频源常态）
+            return isAudio ? audioResponse(source, splitAudioUrl(ctx, chapterUrl))
+                    : videoResponse(source, splitAudioUrl(ctx, chapterUrl));
         }
 
         List<String> visited = new ArrayList<>();
@@ -1394,10 +1461,14 @@ public final class T4Actions {
             }
         }
 
-        // legado contentLoadFinish：正文即播放 URL——音频源 ruleContent.content 解析产物是音频直链，
-        // 交宿主播放器播放，不走 replaceRegex 正文净化
-        if (isAudio) {
-            return audioResponse(source, splitAudioUrl(ctx, text.trim()));
+        // legado contentLoadFinish：正文即播放 URL——音频/视频源 ruleContent.content 解析产物是
+        // 直链，交宿主播放器播，不走 replaceRegex 正文净化
+        if (isDirect) {
+            String u = text.trim();
+            // 视频源正文规则常以可读文案报错（"⚠ 未找到播放数据…"）：非 http 直链回文字视图
+            if (isVideo && !u.toLowerCase(Locale.ROOT).startsWith("http")) return novelResponse(u, "");
+            return isAudio ? audioResponse(source, splitAudioUrl(ctx, u))
+                    : videoResponse(source, splitAudioUrl(ctx, u));
         }
 
         // replaceRegex 净化：格式 "正则##替换"（可多段）
@@ -1442,6 +1513,15 @@ public final class T4Actions {
      * flag 对齐 detail 的 vod_play_from）。入参为 url 字符串或 { url, headers }。
      */
     private static Map<String, Object> audioResponse(Map<String, Object> source, Object urlOrObj) {
+        return directUrlResponse(source, urlOrObj, "音频");
+    }
+
+    /** 视频源（bookSourceType 4）：直链 mp4/m3u8 交宿主播放器（与音频同形，仅 flag 区分） */
+    private static Map<String, Object> videoResponse(Map<String, Object> source, Object urlOrObj) {
+        return directUrlResponse(source, urlOrObj, "视频");
+    }
+
+    private static Map<String, Object> directUrlResponse(Map<String, Object> source, Object urlOrObj, String flag) {
         String url;
         Map<String, String> headers = null;
         if (urlOrObj instanceof Map) {
@@ -1463,7 +1543,7 @@ public final class T4Actions {
         out.put("url", url == null ? "" : url);
         out.put("parse", 0);
         out.put("jx", 0);
-        out.put("flag", "音频");
+        out.put("flag", flag);
         // merged = {...parseSourceHeaders(source), ...(headers||{})}
         Map<String, String> merged = new LinkedHashMap<>(JsExtensions.parseSourceHeaders(source, null));
         if (headers != null) merged.putAll(headers);

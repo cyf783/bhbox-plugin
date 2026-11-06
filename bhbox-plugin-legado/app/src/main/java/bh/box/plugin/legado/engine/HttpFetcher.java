@@ -7,6 +7,8 @@ import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 import java.security.cert.X509Certificate;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -40,7 +42,8 @@ import okio.BufferedSink;
  * - timeout 30000（node AbortController 缺省）→ callTimeout 覆盖整次调用
  * - redirect: 'follow' → okhttp 默认跟随重定向，finalUrl 为重定向链终点
  * - NODE_TLS_REJECT_UNAUTHORIZED='0'（legado SSLHelper.unsafeTrustManager）→ 信任所有证书
- * - node fetch 无 cookie 管理 → okhttp 默认无 CookieJar，不加
+ * - okhttp 默认无 CookieJar；仅当请求头带内部标记 "CookieJar: 1" 时启用书源 Cookie 罐
+ *   （见 CookieJar），标记在逐头复制时剥除，不发给站点
  * - body 为字符串时 node fetch 恒按 utf-8 发送 → writeUtf8
  * - 非握手异常：网络失败抛 RuntimeException（对齐 node fetch 抛 TypeError 传播）；
  *   非 2xx 且响应体为空抛 RuntimeException（对齐 "HTTP xxx for url"）
@@ -123,35 +126,51 @@ public final class HttpFetcher {
     public static HttpResult fetch(String url, String method, Map<String, String> headers, String body, String charset) {
         String m = (method == null || method.trim().isEmpty()) ? "GET" : method.trim().toUpperCase(Locale.ROOT);
         Request.Builder rb = new Request.Builder().url(url);
+        // 内部标记与显式 Cookie 头（头名大小写不敏感，与 okhttp 一致）
+        String explicitCookie = null;
+        boolean cookieJar = false;
+        if (headers != null) {
+            for (Map.Entry<String, String> e : headers.entrySet()) {
+                if (e.getKey() == null) continue;
+                if ("CookieJar".equalsIgnoreCase(e.getKey())) cookieJar = true;
+                else if ("Cookie".equalsIgnoreCase(e.getKey())) explicitCookie = e.getValue();
+            }
+        }
         // 宿主 WebView 登录态通用注入：登录面板打开过登录页后，系统 WebView
         // CookieManager 持有站点会话 cookie（如长佩 lf_user_auth、爱丽丝 lf_*）。
         // OkHttp 与 WebView cookie 存储互不相通，此处将命中的 cookie 附加到请求
         // （书源显式 Cookie 头优先，不覆盖）。桌面 harness 无 CookieManager，反射
         // 一次探测后跳过（webviewCookiesOk 缓存判定结果）。
-        if (webviewCookiesOk == null) {
-            try {
-                Class.forName("android.webkit.CookieManager");
-                webviewCookiesOk = Boolean.TRUE;
-            } catch (Throwable t) {
-                webviewCookiesOk = Boolean.FALSE;
-            }
-        }
-        if (webviewCookiesOk) {
-            try {
-                Class<?> cm = Class.forName("android.webkit.CookieManager");
-                Object inst = cm.getMethod("getInstance").invoke(null);
-                String wc = (String) cm.getMethod("getCookie", String.class).invoke(inst, url);
-                if (wc != null && !wc.isEmpty()) {
-                    boolean hasCookieHeader = headers != null && headers.containsKey("Cookie");
-                    if (!hasCookieHeader) rb.header("Cookie", wc);
+        String cookieHeader = explicitCookie;
+        if (cookieHeader == null || cookieHeader.isEmpty()) {
+            if (webviewCookiesOk == null) {
+                try {
+                    Class.forName("android.webkit.CookieManager");
+                    webviewCookiesOk = Boolean.TRUE;
+                } catch (Throwable t) {
+                    webviewCookiesOk = Boolean.FALSE;
                 }
-            } catch (Throwable ignored) {
+            }
+            if (webviewCookiesOk) {
+                try {
+                    Class<?> cm = Class.forName("android.webkit.CookieManager");
+                    Object inst = cm.getMethod("getInstance").invoke(null);
+                    String wc = (String) cm.getMethod("getCookie", String.class).invoke(inst, url);
+                    if (wc != null && !wc.isEmpty()) cookieHeader = wc;
+                } catch (Throwable ignored) {
+                }
             }
         }
+        // 书源 Cookie 罐（enabledCookieJar）：域罐内 cookie 打底，WebView/显式头在后覆盖同名，
+        // 对齐 legado mergeCookies（options 临时 cookie 优先）。仅标记开启时参与。
+        if (cookieJar) cookieHeader = CookieJar.header(url, cookieHeader);
+        if (cookieHeader != null && !cookieHeader.isEmpty()) rb.header("Cookie", cookieHeader);
         if (headers != null) {
             for (Map.Entry<String, String> e : headers.entrySet()) {
                 if (e.getKey() == null || e.getValue() == null) continue;
-                // okhttp 头名大小写不敏感覆盖，与 node Headers 合并语义一致
+                // 内部标记不发给站点；Cookie 已统一组装，避免逐头覆盖丢失罐内条目
+                if ("CookieJar".equalsIgnoreCase(e.getKey())) continue;
+                if ("Cookie".equalsIgnoreCase(e.getKey())) continue;
                 rb.header(e.getKey(), e.getValue());
             }
         }
@@ -172,7 +191,32 @@ public final class HttpFetcher {
             rb.method(m, null);
         }
 
-        try (Response r = client().newCall(rb.build()).execute()) {
+        // 仅 cookie 罐书源按请求挂 network interceptor：OkHttp 跟随重定向后只暴露最终响应头，
+        // 中间跳（如 OM_pass 的 verify_check 返回 302 时种盾 cookie）的 Set-Cookie 会丢失。
+        // network interceptor 能看到重定向链每一跳的原始响应，逐跳按该跳 URL 落罐。
+        final List<String[]> cookiePairs = new ArrayList<>();
+        OkHttpClient callClient = client();
+        if (cookieJar) {
+            callClient = callClient.newBuilder().addNetworkInterceptor(chain -> {
+                Response resp = chain.proceed(chain.request());
+                String hopUrl = resp.request().url().toString();
+                for (String v : resp.headers("Set-Cookie")) {
+                    cookiePairs.add(new String[]{hopUrl, v});
+                }
+                return resp;
+            }).build();
+        }
+        try (Response r = callClient.newCall(rb.build()).execute()) {
+            if (cookieJar) {
+                if (!cookiePairs.isEmpty()) {
+                    for (String[] pair : cookiePairs) {
+                        CookieJar.save(pair[0], Collections.singletonList(pair[1]));
+                    }
+                } else {
+                    // 兜底：拦截器未产出时用最终响应头（无 network 调用的短路场景）
+                    CookieJar.save(r.request().url().toString(), r.headers("Set-Cookie"));
+                }
+            }
             byte[] raw = r.body() != null ? r.body().bytes() : new byte[0];
             int code = r.code();
             // 对齐 http.js#fetchText：!res.ok 且响应体为空 → 抛 "HTTP xxx for url"（url 截 100 字符）
