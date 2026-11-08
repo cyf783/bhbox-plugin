@@ -12,6 +12,9 @@ import androidx.media3.exoplayer.audio.AudioSink;
 import androidx.media3.exoplayer.mediacodec.MediaCodecSelector;
 import androidx.media3.exoplayer.video.VideoRendererEventListener;
 
+import com.bytevc2.exoplayer.ByteVc2Library;
+import com.bytevc2.exoplayer.ByteVc2VideoRenderer;
+
 import java.util.ArrayList;
 
 /**
@@ -57,6 +60,12 @@ public final class ExoRenderersFactory extends DefaultRenderersFactory {
         MediaCodecSelector selector = mode == MODE_HARDWARE
                 ? mediaCodecSelector
                 : MediaCodecSelector.PREFER_SOFTWARE;
+        // ByteVC2 是私有格式（MIME video/x-bytevc2），MediaCodec 不会命中，必须放在最前面；
+        // 同时兜底「容器伪装成 HEVC 但无 CSD」的 bytevc2 流。so 加载失败时 isAvailable() 为 false，静默跳过。
+        if (ByteVc2Library.isAvailable()) {
+            out.add(new ByteVc2VideoRenderer(allowedVideoJoiningTimeMs, eventHandler,
+                    eventListener, 50, 0, 4, 4));
+        }
         super.buildVideoRenderers(context,
                 mode == MODE_SOFTWARE ? EXTENSION_RENDERER_MODE_PREFER : EXTENSION_RENDERER_MODE_ON,
                 selector,

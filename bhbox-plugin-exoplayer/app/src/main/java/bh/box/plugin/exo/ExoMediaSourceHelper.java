@@ -32,6 +32,7 @@ import androidx.media3.extractor.DefaultExtractorsFactory;
 import androidx.media3.extractor.ts.TsExtractor;
 
 import com.github.catvod.net.OkHttp;
+import com.bytevc2.exoplayer.ByteVc2ExtractorsFactory;
 import com.github.catvod.utils.LOG;
 import com.github.catvod.utils.Path;
 import com.google.common.net.HttpHeaders;
@@ -119,11 +120,14 @@ public final class ExoMediaSourceHelper {
             case C.CONTENT_TYPE_OTHER:
             default:
                 // unfragmented CENC：把 ClearKey 密钥透传给 Mp4Extractor，在 extractor 层解密后按明文输出
+                // ClearKey 分支保持纯 DefaultExtractorsFactory：ByteVc2ExtractorsFactory 不转发
+                // setMp4ClearKeys，且 CENC 明文 MP4 也不需要 bytevc2 demux。
                 ProgressiveMediaSource.Factory progressiveFactory =
                         drmPlan != null && drmPlan.mp4ClearKeys != null
                                 ? new ProgressiveMediaSource.Factory(factory,
                                         getExtractorsFactory().setMp4ClearKeys(drmPlan.mp4ClearKeys))
-                                : new ProgressiveMediaSource.Factory(factory);
+                                : new ProgressiveMediaSource.Factory(factory,
+                                        new ByteVc2ExtractorsFactory());
                 return applyDrm(progressiveFactory, drmPlan).createMediaSource(mediaItem);
         }
     }
