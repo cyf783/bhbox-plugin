@@ -35580,36 +35580,47 @@ main().catch((e) => {
   console.error("startup failed: " + e.message);
   process.exit(1);
 });
+async function preloadGlobalDir(dir, tag) {
+  const files = [];
+  const walk = (d) => {
+    let entries;
+    try {
+      entries = (0, import_fs.readdirSync)(d, { withFileTypes: true });
+    } catch (e) {
+      console.error(`${tag} dir missing: ${e.message}`);
+      return;
+    }
+    for (const ent of entries) {
+      if (ent.name.startsWith(".") || ent.name === "node_modules")
+        continue;
+      const p = (0, import_path.join)(d, ent.name);
+      if (ent.isDirectory())
+        walk(p);
+      else if (ent.name.endsWith(".js"))
+        files.push(p);
+    }
+  };
+  walk(dir);
+  for (const f of files) {
+    try {
+      const m = await import((0, import_url.pathToFileURL)(f).href);
+      for (const [k, v] of Object.entries(m)) {
+        if (k !== "default")
+          globalThis[k] = v;
+      }
+    } catch (e) {
+      console.error(`${tag} load failed: ${f}: ${e.message}`);
+    }
+  }
+  console.log(files.length ? `${tag} preloaded: ${dir} (${files.length} files)` : `${tag} empty: ${dir}`);
+}
 async function main() {
   const appRoot = process.env.APP_ROOT || (0, import_path.join)(sourcesDir, "..");
-  try {
-    for (const f of (0, import_fs.readdirSync)((0, import_path.join)(appRoot, "utils")).filter((x) => x.endsWith(".js"))) {
-      try {
-        await import((0, import_url.pathToFileURL)((0, import_path.join)(appRoot, "utils", f)).href);
-      } catch (e) {
-        console.error(`utils load failed: ${f}: ${e.message}`);
-      }
-    }
-    console.log("utils preloaded");
-  } catch (e) {
-    console.error(`utils dir missing: ${e.message}`);
-  }
-  const panDir = (0, import_path.join)(appRoot, "pan");
-  try {
-    for (const f of (0, import_fs.readdirSync)(panDir).filter((x) => x.endsWith(".js"))) {
-      try {
-        const m = await import((0, import_url.pathToFileURL)((0, import_path.join)(panDir, f)).href);
-        for (const [k, v] of Object.entries(m))
-          globalThis[k] = v;
-        if (m.default)
-          globalThis[f.replace(/\.js$/, "")] = m.default;
-      } catch (e) {
-        console.error(`pan load failed: ${f}: ${e.message}`);
-      }
-    }
-    console.log(`pan preloaded: ${panDir}`);
-  } catch (e) {
-    console.error(`pan dir missing: ${e.message}`);
+  if (process.env.APP_ROOT) {
+    await preloadGlobalDir(appRoot, "globals");
+  } else {
+    await preloadGlobalDir((0, import_path.join)(appRoot, "utils"), "globals");
+    await preloadGlobalDir((0, import_path.join)(appRoot, "pan"), "globals");
   }
   await loadAll();
   await app.listen({ port: Number(process.env.PORT || 0), host: "0.0.0.0" });

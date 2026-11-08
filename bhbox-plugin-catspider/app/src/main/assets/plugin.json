@@ -17,7 +17,7 @@
       "name": "全局目录",
       "type": "folder",
       "value": "",
-      "hint": "全局挂载 js 的目录（其下 utils/、pan/*.js 启动时预载挂 globalThis），留空不加载"
+      "hint": "全局挂载 js 的目录（递归预载其下全部 *.js，命名导出挂 globalThis），留空不加载"
     }
   ]
 }

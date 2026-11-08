@@ -9,7 +9,7 @@ import { join, basename } from 'path';
 //            /config/:id /index 站点下发；POST /api 注册/单key调用
 // 配置走环境变量（本地壳由 NodeServerManager 传 PORT/SOURCES_DIR/APP_ROOT）：
 //   PORT / SOURCES_DIR / APP_ROOT / CONFIG_PWD / EXT_CONFIG / PUBLIC_HOST / SPIDER_JAR
-//   APP_ROOT 为全局预载根目录（用户在插件「配置」里指定的目录，其下 utils/ pan/ 启动时挂 globalThis）
+//   APP_ROOT 为全局预载根目录（用户在插件「配置」里指定的目录，递归预载其下全部 *.js 挂 globalThis）
 // ===================================================================
 function loadEnvFile() {
   let txt;
@@ -541,29 +541,48 @@ main().catch((e) => {
     console.error('startup failed: ' + e.message);
     process.exit(1);
 });
+/**
+ * 通用全局预载：递归收集目录下全部 *.js（跳过 node_modules 与隐藏目录），
+ * import 后将命名导出挂 globalThis（export const Xun → globalThis.Xun）。
+ * 自挂型（文件内 globalThis.X=...）与导出型两种写法都覆盖；default 导出不挂
+ * （避免 globalThis.default 被各模块互相覆盖），目录不存在/为空只记日志不报错。
+ */
+async function preloadGlobalDir(dir, tag) {
+    const files = [];
+    const walk = (d) => {
+        let entries;
+        try { entries = readdirSync(d, { withFileTypes: true }); }
+        catch (e) { console.error(`${tag} dir missing: ${e.message}`); return; }
+        for (const ent of entries) {
+            if (ent.name.startsWith('.') || ent.name === 'node_modules') continue;
+            const p = join(d, ent.name);
+            if (ent.isDirectory()) walk(p);
+            else if (ent.name.endsWith('.js')) files.push(p);
+        }
+    };
+    walk(dir);
+    for (const f of files) {
+        try {
+            const m = await import(pathToFileURL(f).href);
+            for (const [k, v] of Object.entries(m)) {
+                if (k !== 'default') globalThis[k] = v;
+            }
+        } catch (e) { console.error(`${tag} load failed: ${f}: ${e.message}`); }
+    }
+    console.log(files.length ? `${tag} preloaded: ${dir} (${files.length} files)` : `${tag} empty: ${dir}`);
+}
+
 async function main() {
-    // ==== ENV + pan/ 全局预载（全局根目录由 APP_ROOT 显式指定=用户配置目录；未传兜底 sourcesDir 上级=在线壳布局）====
+    // ==== 全局预载（APP_ROOT 显式指定=用户配置目录，结构不固定，递归预载其下全部 *.js；
+    //      未传兜底 sourcesDir 上级=在线壳布局，沿用其 utils/、pan/ 子目录约定）====
     const appRoot = process.env.APP_ROOT || join(sourcesDir, '..');
-    // utils/*.js 自挂全局（env.js→ENV, cookieManager.js→COOKIE, cache.js→CacheStore/setItem/getItem/clearItem）
-    try {
-        for (const f of readdirSync(join(appRoot, 'utils')).filter((x) => x.endsWith('.js'))) {
-            try { await import(pathToFileURL(join(appRoot, 'utils', f)).href); } catch (e) { console.error(`utils load failed: ${f}: ${e.message}`); }
-        }
-        console.log('utils preloaded');
-    } catch (e) { console.error(`utils dir missing: ${e.message}`); }
-    // pan/*.js 导出全挂 globalThis（源内裸用 Baidu2/Quark 等）
-    const panDir = join(appRoot, 'pan');
-    try {
-        for (const f of readdirSync(panDir).filter((x) => x.endsWith('.js'))) {
-            try {
-                const m = await import(pathToFileURL(join(panDir, f)).href);
-                for (const [k, v] of Object.entries(m)) globalThis[k] = v;
-                if (m.default) globalThis[f.replace(/\.js$/, '')] = m.default;
-            } catch (e) { console.error(`pan load failed: ${f}: ${e.message}`); }
-        }
-        console.log(`pan preloaded: ${panDir}`);
-    } catch (e) { console.error(`pan dir missing: ${e.message}`); }
-  await loadAll();
+    if (process.env.APP_ROOT) {
+        await preloadGlobalDir(appRoot, 'globals');
+    } else {
+        await preloadGlobalDir(join(appRoot, 'utils'), 'globals');
+        await preloadGlobalDir(join(appRoot, 'pan'), 'globals');
+    }
+    await loadAll();
     await app.listen({ port: Number(process.env.PORT || 0), host: '0.0.0.0' });
     console.log(`listening on 0.0.0.0:${app.server.address().port}`);
 }

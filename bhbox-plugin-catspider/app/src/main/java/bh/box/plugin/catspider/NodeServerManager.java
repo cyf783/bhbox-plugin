@@ -28,6 +28,8 @@ public class NodeServerManager {
     private int usedPort;
     /** start 时传入的 node 可执行文件（stop 时按该路径 kill 进程） */
     private File nodeBinary;
+    /** start 时生效的全局挂载 js 目录（null=未配置；供配置变更检测，变了需重启应用） */
+    private File globalDir;
 
     private final AtomicBoolean starting = new AtomicBoolean(false);
     private final AtomicBoolean serverUp = new AtomicBoolean(false);
@@ -56,6 +58,7 @@ public class NodeServerManager {
 
         try {
             this.nodeBinary = nodeBinary;
+            this.globalDir = globalDir;
             nodeBinary.setExecutable(true);
 
             int port = DEFAULT_PORT;
@@ -157,6 +160,7 @@ public class NodeServerManager {
     public void stop() {
         serverUp.set(false);
         starting.set(false);
+        globalDir = null;
         if (nodeProcess != null) {
             nodeProcess.destroy();
             nodeProcess = null;
@@ -164,6 +168,11 @@ public class NodeServerManager {
                 Shell.exec("killall -9 " + nodeBinary.getAbsolutePath());
             }
         }
+    }
+
+    /** 本次启动生效的全局挂载 js 目录（未配置为 null；供配置变更检测） */
+    public File getGlobalDir() {
+        return globalDir;
     }
 
     public boolean isRunning() {

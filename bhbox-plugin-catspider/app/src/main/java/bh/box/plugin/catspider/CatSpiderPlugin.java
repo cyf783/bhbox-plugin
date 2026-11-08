@@ -75,10 +75,10 @@ public class CatSpiderPlugin implements ISpiderPlugin {
         try {
             recent = key;
 
-            // 缓存：相同 key 不重复创建；server 意外退出时在此自愈（重启 + 刷新 baseUrl）
+            // 缓存：相同 key 不重复创建；server 意外退出或全局目录配置变更时在此自愈（重启 + 刷新 baseUrl）
             if (spiders.containsKey(key)) {
                 Spider cached = spiders.get(key);
-                if (cached instanceof NodeSpider && (!serverManager.isRunning() || !serverAlive())) {
+                if (cached instanceof NodeSpider && (globalDirChanged() || !serverManager.isRunning() || !serverAlive())) {
                     LOG.i("CatSpider", "server 未运行，重启自愈");
                     startServer();
                     ((NodeSpider) cached).setBaseUrl(serverManager.getBaseUrl());
@@ -135,7 +135,7 @@ public class CatSpiderPlugin implements ISpiderPlugin {
 
     /** 保证 server 运行且已加载指定源文件：优先热加载（不重启、端口稳定），失败回退重启 */
     private void syncServer(File sourceFile, boolean isNewFile) {
-        if (!serverManager.isRunning()) {
+        if (!serverManager.isRunning() || globalDirChanged()) {
             startServer();
             return;
         }
@@ -273,7 +273,7 @@ public class CatSpiderPlugin implements ISpiderPlugin {
     /**
      * 全局挂载 js 目录：读插件「配置」里用户填写的 file 参数（全局目录路径）。
      * 未配置返回 null（不预载全局目录，server 兜底 sourcesDir 上级=在线壳布局）。
-     * 配置变更随下次 server 重启生效（自愈/新源都会触发重启）。
+     * 配置变更在访问站点时由 globalDirChanged() 检测并自动重启生效，无需重启 app。
      */
     private File resolveGlobalDir() {
         ApkPluginBean self = (ApkPluginBean) Plugin.getPluginBeanById(ID);
@@ -288,6 +288,16 @@ public class CatSpiderPlugin implements ISpiderPlugin {
             }
         }
         return null;
+    }
+
+    /** 用户「全局目录」配置与 server 启动时是否不一致（server 未运行视为未变更，由启动流程处理） */
+    private boolean globalDirChanged() {
+        if (!serverManager.isRunning()) return false;
+        File current = resolveGlobalDir();
+        File started = serverManager.getGlobalDir();
+        if (current == null && started == null) return false;
+        if (current == null || started == null) return true;
+        return !current.getAbsolutePath().equals(started.getAbsolutePath());
     }
 
     @Override
