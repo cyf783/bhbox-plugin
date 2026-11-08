@@ -8,7 +8,9 @@ import com.github.catvod.crawler.SpiderNull;
 import com.github.catvod.net.OkHttp;
 import com.github.catvod.plugin.IRuntimePlugin;
 import com.github.catvod.plugin.ISpiderPlugin;
+import com.github.catvod.plugin.bean.ApkParam;
 import com.github.catvod.plugin.bean.ApkPluginBean;
+import com.github.catvod.utils.ClanPath;
 import com.github.catvod.utils.Io;
 import com.github.catvod.utils.LOG;
 import com.github.catvod.utils.Path;
@@ -197,7 +199,7 @@ public class CatSpiderPlugin implements ISpiderPlugin {
             deployModulePackageJson(sourcesDir);
             deployNodeModules(sourcesDir, false);
 
-            serverManager.start(nodeBinary, serverJs, sourcesDir);
+            serverManager.start(nodeBinary, serverJs, sourcesDir, resolveGlobalDir());
 
             // 预填已加载集合：扫描一级子目录（布局固定 <md5>/<md5>.js，与 server loadAll 一致）
             loadedFiles.clear();
@@ -266,6 +268,26 @@ public class CatSpiderPlugin implements ISpiderPlugin {
         } catch (Exception e) {
             LOG.e("CatSpider", "释放预置依赖失败");
         }
+    }
+
+    /**
+     * 全局挂载 js 目录：读插件「配置」里用户填写的 file 参数（全局目录路径）。
+     * 未配置返回 null（不预载全局目录，server 兜底 sourcesDir 上级=在线壳布局）。
+     * 配置变更随下次 server 重启生效（自愈/新源都会触发重启）。
+     */
+    private File resolveGlobalDir() {
+        ApkPluginBean self = (ApkPluginBean) Plugin.getPluginBeanById(ID);
+        List<ApkParam> params = self == null ? null : self.getParams();
+        if (params == null) return null;
+        for (ApkParam p : params) {
+            if ("file".equals(p.getId()) && !TextUtils.isEmpty(p.getValue())) {
+                // 目录选择器交付的是 clanPath（file:/x 形态），转回文件系统绝对路径；手输普通路径原样通过
+                File dir = ClanPath.toAbsFile(p.getValue().trim());
+                dir.mkdirs();
+                return dir;
+            }
+        }
+        return null;
     }
 
     @Override

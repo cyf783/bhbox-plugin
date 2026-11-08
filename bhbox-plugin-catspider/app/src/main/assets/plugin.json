@@ -6,9 +6,18 @@
   "spider": "cat",
   "mainClass": "bh.box.plugin.catspider.CatSpiderPlugin",
   "downloadUrl": "https://h-box-release.netlify.app/release/plugins/catspider.apk",
-  "version": 117,
-  "versionName": "1.1.7",
+  "version": 118,
+  "versionName": "1.1.8",
   "minSdk": 23,
   "minAppVersion": 383,
-  "depends": ["bh.box.plugin.node"]
+  "depends": ["bh.box.plugin.node"],
+  "params": [
+    {
+      "id": "file",
+      "name": "全局目录",
+      "type": "folder",
+      "value": "",
+      "hint": "全局挂载 js 的目录（其下 utils/、pan/*.js 启动时预载挂 globalThis），留空不加载"
+    }
+  ]
 }

@@ -48,8 +48,9 @@ public class NodeServerManager {
      * @param nodeBinary node 可执行文件（插件 assets 解压目录）
      * @param serverJs   cat-server.js 入口（插件 assets 解压目录）
      * @param sourcesDir 源文件目录
+     * @param globalDir  全局挂载 js 目录（用户在插件「配置」里指定）；null 时 server 兜底 sourcesDir 上级
      */
-    public void start(File nodeBinary, File serverJs, File sourcesDir) {
+    public void start(File nodeBinary, File serverJs, File sourcesDir, File globalDir) {
         if (serverUp.get()) return;
         if (!starting.compareAndSet(false, true)) return;
 
@@ -78,6 +79,10 @@ public class NodeServerManager {
                 pb.redirectErrorStream(true);
                 pb.environment().put("PORT", String.valueOf(port));
                 pb.environment().put("TMPDIR", System.getProperty("java.io.tmpdir"));
+                // 全局预载根目录（其下 utils/ pan/ 启动预载挂 globalThis）：仅用户已配置时传入
+                if (globalDir != null && globalDir.isDirectory()) {
+                    pb.environment().put("APP_ROOT", globalDir.getAbsolutePath());
+                }
 
                 nodeProcess = pb.start();
 

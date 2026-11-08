@@ -7,8 +7,9 @@ import { join, basename } from 'path';
 //   本地壳 -> /spider/:name/*  Java NodeSpider 写死该前缀（动作卡适配层）
 //   在线壳 -> /api/:name?pwd=  spiderHandler（pwd 门 + auto-init + ext 下发）
 //            /config/:id /index 站点下发；POST /api 注册/单key调用
-// 配置走环境变量（本地壳由 NodeServerManager 传 PORT/SOURCES_DIR）：
-//   PORT / SOURCES_DIR / CONFIG_PWD / EXT_CONFIG / PUBLIC_HOST / SPIDER_JAR
+// 配置走环境变量（本地壳由 NodeServerManager 传 PORT/SOURCES_DIR/APP_ROOT）：
+//   PORT / SOURCES_DIR / APP_ROOT / CONFIG_PWD / EXT_CONFIG / PUBLIC_HOST / SPIDER_JAR
+//   APP_ROOT 为全局预载根目录（用户在插件「配置」里指定的目录，其下 utils/ pan/ 启动时挂 globalThis）
 // ===================================================================
 function loadEnvFile() {
   let txt;
@@ -541,8 +542,8 @@ main().catch((e) => {
     process.exit(1);
 });
 async function main() {
-    // ==== ENV + pan/ 全局预载（index.js / source/ / pan/ / utils/ / config/ 平级）====
-    const appRoot = join(sourcesDir, '..');
+    // ==== ENV + pan/ 全局预载（全局根目录由 APP_ROOT 显式指定=用户配置目录；未传兜底 sourcesDir 上级=在线壳布局）====
+    const appRoot = process.env.APP_ROOT || join(sourcesDir, '..');
     // utils/*.js 自挂全局（env.js→ENV, cookieManager.js→COOKIE, cache.js→CacheStore/setItem/getItem/clearItem）
     try {
         for (const f of readdirSync(join(appRoot, 'utils')).filter((x) => x.endsWith('.js'))) {

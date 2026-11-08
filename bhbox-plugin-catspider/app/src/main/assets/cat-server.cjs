@@ -35581,7 +35581,7 @@ main().catch((e) => {
   process.exit(1);
 });
 async function main() {
-  const appRoot = (0, import_path.join)(sourcesDir, "..");
+  const appRoot = process.env.APP_ROOT || (0, import_path.join)(sourcesDir, "..");
   try {
     for (const f of (0, import_fs.readdirSync)((0, import_path.join)(appRoot, "utils")).filter((x) => x.endsWith(".js"))) {
       try {
