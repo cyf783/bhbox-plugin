@@ -12,6 +12,7 @@ dependencyResolutionManagement {
     repositories {
         maven { url 'https://jitpack.io' }
         maven { url 'https://mirrors.huaweicloud.com/repository/maven/' }
+        maven { url "https://maven.aliyun.com/repository/releases" }
         google()
         mavenCentral()
         mavenLocal()
