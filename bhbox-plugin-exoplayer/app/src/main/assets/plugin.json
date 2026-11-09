@@ -1,12 +1,12 @@
 {
   "id": "bh.box.plugin.exo",
   "name": "EXO Player",
-  "description": "ExoPlayer (media3) 视频播放引擎插件",
+  "description": "ExoPlayer (media3) 视频播放引擎插件，支持音效、夜间模式、缓冲策略。直通/隧道输出下音效不生效",
   "type": "player",
   "mainClass": "bh.box.plugin.exo.ExoPlugin",
   "downloadUrl": "https://h-box-release.netlify.app/release/plugins/exoplayer.apk",
-  "version": 122,
-  "versionName": "1.2.2",
+  "version": 123,
+  "versionName": "1.2.3",
   "minSdk": 23,
   "minAppVersion": 385,
   "autoRun": true,
@@ -29,6 +29,52 @@
       "options": [
         {"name": "关闭", "value": "false"},
         {"name": "开启", "value": "true"}
+      ]
+    },
+    {
+      "id": "sound_effect",
+      "name": "音效模式",
+      "type": "radio",
+      "value": "关闭",
+      "options": [
+        {"name": "关闭", "value": "关闭"},
+        {"name": "影院", "value": "影院"},
+        {"name": "重低音", "value": "重低音"},
+        {"name": "3D环绕", "value": "3D环绕"},
+        {"name": "HiFi", "value": "HiFi"},
+        {"name": "人声增强", "value": "人声增强"}
+      ]
+    },
+    {
+      "id": "effect_strength",
+      "name": "效果强度",
+      "type": "radio",
+      "value": "标准",
+      "options": [
+        {"name": "轻", "value": "轻"},
+        {"name": "标准", "value": "标准"},
+        {"name": "强", "value": "强"}
+      ]
+    },
+    {
+      "id": "night_mode",
+      "name": "夜间模式",
+      "type": "radio",
+      "value": "false",
+      "options": [
+        {"name": "关闭", "value": "false"},
+        {"name": "开启", "value": "true"}
+      ]
+    },
+    {
+      "id": "buffer",
+      "name": "缓冲策略",
+      "type": "radio",
+      "value": "标准",
+      "options": [
+        {"name": "省流", "value": "省流"},
+        {"name": "标准", "value": "标准"},
+        {"name": "极速", "value": "极速"}
       ]
     }
   ]

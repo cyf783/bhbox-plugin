@@ -26,8 +26,22 @@ public class ExoPlayerFactory implements PlayerFactory {
      */
     public static final String CODEC_SOFTWARE = "软解码";
 
+    /** 缓冲策略档位（与 plugin.json buffer 参数 value 对应） */
+    public static final String BUFFER_SAVE = "省流";
+    public static final String BUFFER_STANDARD = "标准";
+    public static final String BUFFER_FAST = "极速";
+
+    // 音效/夜间模式/缓冲策略默认值（与 plugin.json 一致）
+    public static final String DEFAULT_EFFECT = AudioFxController.OFF;
+    public static final String DEFAULT_STRENGTH = AudioFxController.STRENGTH_STANDARD;
+    public static final String DEFAULT_BUFFER = BUFFER_STANDARD;
+
     private String mDecoder = CODEC_HARDWARE;
     private boolean mTunnel = false;
+    private String mSoundEffect = DEFAULT_EFFECT;
+    private String mEffectStrength = DEFAULT_STRENGTH;
+    private boolean mNightMode = false;
+    private String mBuffer = DEFAULT_BUFFER;
 
     /** 配置值 → ExoRenderersFactory.MODE_* */
     private static int modeOf(String decoder) {
@@ -57,10 +71,25 @@ public class ExoPlayerFactory implements PlayerFactory {
                     case "tunnel":
                         mTunnel = Boolean.parseBoolean(param.getValue());
                         break;
+                    case "sound_effect":
+                        mSoundEffect = param.getValue() != null && !param.getValue().isEmpty()
+                                ? param.getValue() : DEFAULT_EFFECT;
+                        break;
+                    case "effect_strength":
+                        mEffectStrength = param.getValue() != null && !param.getValue().isEmpty()
+                                ? param.getValue() : DEFAULT_STRENGTH;
+                        break;
+                    case "night_mode":
+                        mNightMode = Boolean.parseBoolean(param.getValue());
+                        break;
+                    case "buffer":
+                        mBuffer = param.getValue() != null && !param.getValue().isEmpty()
+                                ? param.getValue() : DEFAULT_BUFFER;
+                        break;
                 }
             }
         }
-        return new ExoMediaPlayer(context, modeOf(mDecoder), mTunnel);
+        return new ExoMediaPlayer(context, modeOf(mDecoder), mTunnel, mSoundEffect, mEffectStrength, mNightMode, mBuffer);
     }
 
     @Override

@@ -36,6 +36,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 
 @OptIn(markerClass = UnstableApi.class)
 public class ExoMediaPlayer extends com.github.catvod.plugin.player.spi.Player implements Player.Listener {
@@ -63,6 +64,12 @@ public class ExoMediaPlayer extends com.github.catvod.plugin.player.spi.Player i
     /** 细粒度解码模式（见 ExoRenderersFactory.MODE_*），默认硬解 */
     private int decodeMode = ExoRenderersFactory.MODE_HARDWARE;
     private boolean isTunnel = false;
+    /** 音效控制器（preset/strength/nightMode 来自 plugin.json，session 挂载见 AudioFxController） */
+    private AudioFxController mAudioFx;
+    /** 缓冲策略档位（ExoPlayerFactory.BUFFER_*），initPlayer 时构建 LoadControl */
+    private String bufferProfile = ExoPlayerFactory.BUFFER_STANDARD;
+    /** 缓冲策略是否已应用（LoadControl 仅在首个 initPlayer 生效） */
+    private boolean bufferApplied;
     /** 最近一次上报的视频宽度，0 表示纯音频 */
     private int mVideoWidth;
     /** 渲染器清单只打一次（用于确认 ffmpeg 扩展是否真的被反射加载） */
@@ -80,6 +87,15 @@ public class ExoMediaPlayer extends com.github.catvod.plugin.player.spi.Player i
         this.isTunnel = isTunnel;
     }
 
+    /** 全参数构造（P1 扩展）：音效/夜间模式/缓冲策略 */
+    public ExoMediaPlayer(Context context, int decodeMode, boolean isTunnel,
+                          String soundEffect, String effectStrength, boolean nightMode, String bufferProfile) {
+        this(context, decodeMode, isTunnel);
+        this.mAudioFx = new AudioFxController(soundEffect, effectStrength, nightMode);
+        this.bufferProfile = bufferProfile == null || bufferProfile.isEmpty()
+                ? ExoPlayerFactory.BUFFER_STANDARD : bufferProfile;
+    }
+
     @Override
     public void initPlayer() {
         if (mRenderersFactory == null) {
@@ -94,7 +110,7 @@ public class ExoMediaPlayer extends com.github.catvod.plugin.player.spi.Player i
                     .setTunnelingEnabled(isTunnel));
         }
         if (mLoadControl == null) {
-            mLoadControl = new DefaultLoadControl();
+            mLoadControl = buildLoadControl(bufferProfile);
         }
 
         mMediaPlayer = new ExoPlayer.Builder(mAppContext)
@@ -106,6 +122,20 @@ public class ExoMediaPlayer extends com.github.catvod.plugin.player.spi.Player i
         setOptions();
 
         mMediaPlayer.addListener(ExoMediaPlayer.this);
+        // 音效挂载：audio session 就绪/变更（蓝牙插拔、sink 重建）时重建效果链
+        if (mAudioFx != null && mAudioFx.isActive()) {
+            mMediaPlayer.addAnalyticsListener(new AnalyticsListener() {
+                @Override
+                public void onAudioSessionIdChanged(AnalyticsListener.EventTime eventTime, int audioSessionId) {
+                    if (mAudioFx != null) mAudioFx.apply(audioSessionId);
+                }
+            });
+        }
+        // 缓冲策略按当前会话应用一次（LoadControl 每次构建都被新 Builder 引用，此处仅记日志）
+        if (!bufferApplied) {
+            bufferApplied = true;
+            LOG.i("ExoMediaPlayer buffer profile=" + bufferProfile);
+        }
         // DRM 会话诊断监听：provisioning / license 失败的根因只在 onDrmSessionManagerError 里
         // （fork 的 ExoPlayer.addListener 只收 Player.Listener，DRM 事件走 analytics 通道）
         mMediaPlayer.addAnalyticsListener(new AnalyticsListener() {
@@ -128,6 +158,42 @@ public class ExoMediaPlayer extends com.github.catvod.plugin.player.spi.Player i
 
     public DefaultTrackSelector getTrackSelector() {
         return mTrackSelector;
+    }
+
+    /**
+     * 缓冲策略三档（plugin.json buffer 参数）。
+     * 省流：低水位小内存，弱网/流量场景；极速：高水位大预缓冲，大内存盒子起播后几乎不转圈；
+     * 标准：贴近 media3 DefaultLoadControl 缺省值（back buffer 一律 0，不额外占内存）。
+     */
+    private static LoadControl buildLoadControl(String profile) {
+        int minBufferMs;
+        int maxBufferMs;
+        int bufferForPlaybackMs;
+        int bufferForPlaybackAfterRebufferMs;
+        switch (profile == null ? "" : profile) {
+            case ExoPlayerFactory.BUFFER_SAVE:
+                minBufferMs = (int) TimeUnit.SECONDS.toMillis(15);
+                maxBufferMs = (int) TimeUnit.SECONDS.toMillis(30);
+                bufferForPlaybackMs = 1500;
+                bufferForPlaybackAfterRebufferMs = 2500;
+                break;
+            case ExoPlayerFactory.BUFFER_FAST:
+                minBufferMs = (int) TimeUnit.SECONDS.toMillis(50);
+                maxBufferMs = (int) TimeUnit.SECONDS.toMillis(90);
+                bufferForPlaybackMs = 5000;
+                bufferForPlaybackAfterRebufferMs = 2500;
+                break;
+            default:
+                minBufferMs = (int) TimeUnit.SECONDS.toMillis(30);
+                maxBufferMs = (int) TimeUnit.SECONDS.toMillis(60);
+                bufferForPlaybackMs = 2500;
+                bufferForPlaybackAfterRebufferMs = 2500;
+                break;
+        }
+        return new DefaultLoadControl.Builder()
+                .setBufferDurationsMs(minBufferMs, maxBufferMs, bufferForPlaybackMs, bufferForPlaybackAfterRebufferMs)
+                .setPrioritizeTimeOverSizeThresholds(true)
+                .build();
     }
 
     @Override
@@ -198,6 +264,9 @@ public class ExoMediaPlayer extends com.github.catvod.plugin.player.spi.Player i
             mMediaPlayer.removeListener(this);
             mMediaPlayer.release();
             mMediaPlayer = null;
+        }
+        if (mAudioFx != null) {
+            mAudioFx.release();
         }
         mIsPreparing = false;
         mSpeedPlaybackParameters = null;

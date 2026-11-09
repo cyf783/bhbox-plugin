@@ -75,6 +75,12 @@
 
 - decoder（解码配置，radio）：硬解码 / 软解码
 - tunnel（隧道模式，radio）
+- sound_effect（音效模式，radio）：关闭 / 影院 / 重低音 / 3D环绕 / HiFi / 人声增强（audiofx 效果链，换集生效）
+- effect_strength（效果强度，radio）：轻 / 标准 / 强（音效预设的缩放系数）
+- night_mode（夜间模式，radio）：DynamicsProcessing 压限压低动态范围（仅 API 28+ 生效，低版本静默关闭）
+- buffer（缓冲策略，radio）：省流（15/30s 低水位，弱网省内存）/ 标准（30/60s 缺省）/ 极速（50/90s 大预缓冲）
+
+> 音效限制：输出为 bitstream 直通（AC3/EAC3 passthrough、隧道模式）时不经过 audiofx 效果链，音效自动失效；个别 OEM TV 会静默 no-op audiofx，可查 `AudioFx` 日志确认挂载结果。
 
 ## 许可
 
