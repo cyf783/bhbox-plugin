@@ -1,8 +1,6 @@
 pluginManagement {
     repositories {
         maven { url 'https://mirrors.huaweicloud.com/repository/maven/' }
-        maven { url 'https://mirrors.huaweicloud.com/repository/google/' }
-        maven { url 'https://mirrors.huaweicloud.com/repository/gradle-plugin/' }
         gradlePluginPortal()
         mavenCentral()
         google()
@@ -15,10 +13,7 @@ dependencyResolutionManagement {
         maven { url 'https://jitpack.io' }
         // mavenLocal：本地调试 bhbox-catvod 时使用
         mavenLocal()
-        maven { url "https://maven.aliyun.com/repository/releases" }
-        maven { url 'https://mirrors.huaweicloud.com/repository/central/' }
         maven { url 'https://mirrors.huaweicloud.com/repository/maven/' }
-        maven { url 'https://mirrors.huaweicloud.com/repository/google/' }
         google()
         mavenCentral()
     }
