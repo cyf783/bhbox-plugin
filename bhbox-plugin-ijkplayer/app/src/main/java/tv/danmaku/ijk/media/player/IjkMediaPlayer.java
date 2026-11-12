@@ -431,7 +431,8 @@ public final class IjkMediaPlayer extends AbstractMediaPlayer {
                     sb.append(entry.getValue());
                 sb.append("\r\n");
                 setOption(OPT_CATEGORY_FORMAT, "headers", sb.toString());
-                setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "protocol_whitelist", "async,cache,crypto,file,http,https,ijkhttphook,ijkinject,ijklivehook,ijklongurl,ijksegment,ijktcphook,pipe,rtp,tcp,tls,udp,ijkurlhook,data");
+                // 与 IjkPlayer.setDataSource 保持一致：带 header 时同样放行 rtmp 系列
+                setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "protocol_whitelist", "async,cache,crypto,file,http,https,ijkhttphook,ijkinject,ijklivehook,ijklongurl,ijksegment,ijktcphook,pipe,rtp,tcp,tls,udp,ijkurlhook,data,rtmp,rtmps,rtmpt,rtmpte,rtmpts,rtmpe,ffrtmphttp,ffrtmpcrypt");
             }
         }
         setDataSource(path);

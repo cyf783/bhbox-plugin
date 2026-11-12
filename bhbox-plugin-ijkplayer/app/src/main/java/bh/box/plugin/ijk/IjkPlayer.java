@@ -154,7 +154,8 @@ public class IjkPlayer extends Player implements IMediaPlayer.OnErrorListener,
         } catch (Exception e) {
             if (mEventListener != null) mEventListener.onError(-1, Util.getRootCauseMessage(e));
         }
-        mMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "protocol_whitelist", "ijkio,ffio,async,cache,crypto,file,dash,http,https,ijkhttphook,ijkinject,ijklivehook,ijklongurl,ijksegment,ijktcphook,pipe,rtp,tcp,tls,udp,ijkurlhook,data,concat,subfile,ffconcat");
+        // rtmp 及其隧道协议需显式列入，否则 FFmpeg 会拒绝打开 rtmp:// 顶层 URL（Protocol 'rtmp' not on whitelist）
+        mMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "protocol_whitelist", "ijkio,ffio,async,cache,crypto,file,dash,http,https,ijkhttphook,ijkinject,ijklivehook,ijklongurl,ijksegment,ijktcphook,pipe,rtp,tcp,tls,udp,ijkurlhook,data,concat,subfile,ffconcat,rtmp,rtmps,rtmpt,rtmpte,rtmpts,rtmpe,ffrtmphttp,ffrtmpcrypt");
         try {
             path = encodeSpaceChinese(path);
         } catch (Exception ignored) {
