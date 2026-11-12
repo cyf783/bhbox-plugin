@@ -22,6 +22,12 @@
 # 连同 native 方法一起保住。注意 fork 反射的是 FfmpegVideoRenderer(非上游的
 # ExperimentalFfmpegVideoRenderer), 构造签名 (Context,long,Handler,listener,int)。
 -keep class androidx.media3.decoder.ffmpeg.** { *; }
+
+# rtmp-client(io.antmedia:rtmp-client:3.2.0, lib-datasource-rtmp 的传递依赖)必须无条件 keep：
+# RtmpClient 含 native 方法经 librtmp-jni.so 调用，且 RtmpIOException 等嵌套类只在
+# throws 子句被引用，R8 默认会整类裁掉（RTMP 连接失败时 throw 处 NoClassDefFoundError）。
+# 体积代价可忽略（classes.jar 仅 3.7KB）。
+-keep class io.antmedia.** { *; }
 -keepclasseswithmembernames class * {
     native <methods>;
 }
