@@ -13,6 +13,7 @@ import androidx.media3.common.PlaybackException;
 import androidx.media3.common.util.UnstableApi;
 import androidx.media3.common.util.Util;
 import androidx.media3.database.StandaloneDatabaseProvider;
+import androidx.media3.datasource.DataSpec;
 import androidx.media3.datasource.DataSource;
 import androidx.media3.datasource.DefaultDataSource;
 import androidx.media3.datasource.cache.Cache;
@@ -41,6 +42,9 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.TreeMap;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
+
+import okhttp3.OkHttpClient;
 
 @OptIn(markerClass = UnstableApi.class)
 public final class ExoMediaSourceHelper {
@@ -359,6 +363,29 @@ public final class ExoMediaSourceHelper {
      * HLS 多分片时比每个源各建一个 client 省连接与 TLS 握手。
      */
     private DataSource.Factory createDataSourceFactory(Map<String, String> headers) {
+        return createDataSourceFactory(headers, OkHttp.client());
+    }
+
+    /** preloadClient：预读专用短超时（connect 5s / read 10s）——源站故障时快速放弃，避免预读长挂占住同 key 缓存锁拖累起播；播放侧全局 client 不受影响 */
+    private volatile OkHttpClient sPreloadClient;
+
+    private OkHttpClient preloadClient() {
+        OkHttpClient client = sPreloadClient;
+        if (client == null) {
+            synchronized (this) {
+                if (sPreloadClient == null) {
+                    sPreloadClient = OkHttp.client().newBuilder()
+                            .connectTimeout(5, TimeUnit.SECONDS)
+                            .readTimeout(10, TimeUnit.SECONDS)
+                            .build();
+                }
+                client = sPreloadClient;
+            }
+        }
+        return client;
+    }
+
+    private DataSource.Factory createDataSourceFactory(Map<String, String> headers, OkHttpClient client) {
         String userAgent = mUserAgent;
         Map<String, String> requestHeaders = new HashMap<>();
         if (headers != null) {
@@ -376,7 +403,7 @@ public final class ExoMediaSourceHelper {
             }
         }
         return new DefaultDataSource.Factory(mAppContext,
-                new OkHttpDataSource.Factory(OkHttp.client())
+                new OkHttpDataSource.Factory(client)
                         .setUserAgent(userAgent)
                         .setDefaultRequestProperties(requestHeaders));
     }
@@ -450,5 +477,181 @@ public final class ExoMediaSourceHelper {
 
     public void setCache(Cache cache) {
         this.mCache = cache;
+    }
+
+    // ── 下一集首屏数据预读 ──
+    // 单例内只允许一个预读任务在途（由 ExoMediaPlayer 的单线程调度保证），取消经这两个标记生效：
+    // sPreloadCancelled 由 readAll 循环检查，sPreloadSource 支持从外部关闭在途连接
+    private volatile DataSource sPreloadSource;
+    private volatile boolean sPreloadCancelled;
+
+    /** 预读上限（单集），与方案文档一致 */
+    public static final long PRELOAD_MAX_BYTES = 4L * 1024 * 1024;
+    /** HLS playlist 读取上限（playlist 是文本，通常远小于该值） */
+    private static final long PLAYLIST_MAX_BYTES = 512 * 1024;
+    /** HLS 预读分片数 */
+    private static final int HLS_PRELOAD_SEGMENTS = 2;
+
+    /** 取消在途预读：置标记并关闭在途连接；已写入缓存的数据保留，由 LRU 淘汰策略管理 */
+    public void cancelPreload() {
+        sPreloadCancelled = true;
+        DataSource ds = sPreloadSource;
+        if (ds != null) {
+            try {
+                ds.close();
+            } catch (Throwable ignored) {
+            }
+        }
+    }
+
+    /**
+     * 预读下一集首屏数据（同步阻塞，必须由调用方在后台线程执行）：
+     * 经 {@link #getCacheDataSourceFactory} 读穿写入 SimpleCache，与正式播放共用同一
+     * cache key（分片 uri + 规范化 headers 后缀），切集起播时 CacheDataSource 直接命中。
+     * progressive 读首段；HLS 读全量 playlist 后按 positionMs 定位起播分片，预读该分片起的
+     * 2 个分片；其余类型跳过。
+     *
+     * @param positionMs 预计起播位置（历史进度/跳过片头取大者），0 表示从头播
+     * @return 预读字节数，0 表示无可预读内容，-1 表示失败
+     */
+    public int preload(String uri, Map<String, String> headers, long bytes, long positionMs) {
+        try {
+            if (uri == null || uri.length() == 0 || bytes <= 0) return 0;
+            Uri contentUri = Uri.parse(uri);
+            String scheme = contentUri.getScheme();
+            // 仅预读 http(s) 直链；本地代理/文件等地址起播本就无网络首缓冲
+            if (scheme == null || !("http".equalsIgnoreCase(scheme) || "https".equalsIgnoreCase(scheme))) return 0;
+            sPreloadCancelled = false;
+            Map<String, String> requestHeaders = toRequestHeaders(headers);
+            // 按路径判断 HLS（query 中的 .m3u8 字样不代表内容是 playlist）
+            String path = contentUri.getPath();
+            if (path != null && path.toLowerCase().contains(".m3u8")) {
+                return preloadHls(contentUri, requestHeaders, bytes, 0, positionMs, null);
+            }
+            // progressive 容器（mp4/mkv）需解析索引才能从播放时间定位字节偏移，成本过高：
+            // 起播位置大于 0（续播/跳片头）时预读开头数据无法命中，放弃
+            if (positionMs > 0) return 0;
+            byte[] data = readIntoCache(contentUri, requestHeaders, bytes);
+            return data == null ? -1 : data.length;
+        } catch (Throwable t) {
+            LOG.e("bh-preload error " + describeChain(t));
+            return -1;
+        }
+    }
+
+    /** 异常链摘要（类名+消息），预读失败时用于日志定位 */
+    private static String describeChain(Throwable t) {
+        StringBuilder sb = new StringBuilder();
+        while (t != null) {
+            sb.append(t.getClass().getSimpleName()).append(":").append(t.getMessage()).append(" <- ");
+            t = t.getCause();
+        }
+        return sb.substring(0, sb.length() - 4);
+    }
+
+    /**
+     * HLS 预读：读 playlist → 按 positionMs 跳过起播时间之前的分片 → 预读起播分片起的
+     * {@value #HLS_PRELOAD_SEGMENTS} 个分片；条目仍是 m3u8（master playlist）时下钻一层
+     * （master 无 EXTINF 时长，时间定位只在 media playlist 层生效）
+     */
+    private int preloadHls(Uri uri, Map<String, String> headers, long bytes, int depth, long positionMs, Uri inheritedMap) {
+        byte[] data = readIntoCache(uri, headers, PLAYLIST_MAX_BYTES);
+        if (data == null) return -1;
+        String text = new String(data, 0, data.length).replace("\r", "");
+        Uri first = null;
+        java.util.List<Uri> segments = new java.util.ArrayList<>();
+        double target = positionMs / 1000.0;
+        double elapsed = 0; // 已扫过分片的累计播放时长（EXTINF）
+        double curDur = 0;
+        boolean isMediaPlaylist = text.contains("#EXTINF:"); // master playlist 无时长，时间过滤只对 media playlist 生效
+        Uri mapSeg = inheritedMap; // fMP4 的 init 段（#EXT-X-MAP），起播必需但不出现在分片条目中；master 层继承的会被 media 层自声明的覆盖
+        for (String line : text.split("\n")) {
+            String t = line.trim();
+            if (t.startsWith("#EXTINF:")) {
+                int comma = t.indexOf(',');
+                try {
+                    curDur = Float.parseFloat(t.substring(8, comma > 0 ? comma : t.length()));
+                } catch (Throwable ignored) {
+                    curDur = 0;
+                }
+                continue;
+            }
+            if (t.startsWith("#EXT-X-MAP:")) {
+                int i = t.indexOf("URI=\"");
+                if (i >= 0) {
+                    int j = t.indexOf('"', i + 5);
+                    if (j > i + 5) mapSeg = resolve(uri, t.substring(i + 5, j));
+                }
+                continue;
+            }
+            if (t.length() == 0 || t.startsWith("#")) continue;
+            Uri resolved = resolve(uri, t);
+            double end = elapsed + curDur;
+            elapsed = end;
+            curDur = 0;
+            if (resolved == null) continue;
+            if (target > 0 && isMediaPlaylist && end <= target) continue; // 起播时间之前的分片不预读
+            if (first == null) {
+                first = resolved;
+            } else if (segments.size() < HLS_PRELOAD_SEGMENTS - 1) {
+                segments.add(resolved);
+            }
+            if (segments.size() >= HLS_PRELOAD_SEGMENTS - 1) break;
+        }
+        if (first == null) return 0;
+        if (depth < 2 && first.toString().toLowerCase().contains(".m3u8")) {
+            return preloadHls(first, headers, bytes, depth + 1, positionMs, mapSeg);
+        }
+        segments.add(0, first); // 共 HLS_PRELOAD_SEGMENTS 个分片
+        long total = 0;
+        // init 段读取失败不中断，分片缓存仍可命中后续 range 请求
+        if (mapSeg != null) {
+            byte[] initData = readIntoCache(mapSeg, headers, bytes);
+            if (initData != null) total += initData.length;
+        }
+        for (Uri seg : segments) {
+            if (sPreloadCancelled || total >= bytes) break;
+            byte[] segData = readIntoCache(seg, headers, bytes - total);
+            if (segData == null) return total > 0 ? (int) total : -1;
+            total += segData.length;
+        }
+        return (int) total;
+    }
+
+    /** playlist 内相对地址 → 绝对 Uri；无法解析返回 null */
+    private static Uri resolve(Uri base, String ref) {
+        try {
+            // android.net.Uri 无相对解析，走 java.net.URL
+            return Uri.parse(new java.net.URL(new java.net.URL(base.toString()), ref).toString());
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    /** 经 CacheDataSource 读穿写入 SimpleCache，读满 bytes / 流结束 / 取消即返回；失败返回 null */
+    private byte[] readIntoCache(Uri uri, Map<String, String> requestHeaders, long bytes) {
+        DataSource ds = getCacheDataSourceFactory(createDataSourceFactory(requestHeaders, preloadClient()), requestHeaders)
+                .createDataSource();
+        sPreloadSource = ds;
+        try {
+            ds.open(new DataSpec(uri, 0, bytes));
+            byte[] buf = new byte[64 * 1024];
+            java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+            while (out.size() < bytes && !sPreloadCancelled) {
+                int read = ds.read(buf, 0, buf.length);
+                if (read == C.RESULT_END_OF_INPUT) break;
+                out.write(buf, 0, read);
+            }
+            return out.toByteArray();
+        } catch (Throwable t) {
+            LOG.e("bh-preload read error " + describeChain(t));
+            return null;
+        } finally {
+            sPreloadSource = null;
+            try {
+                ds.close();
+            } catch (Throwable ignored) {
+            }
+        }
     }
 }

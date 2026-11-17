@@ -198,8 +198,47 @@ public class ExoMediaPlayer extends com.github.catvod.plugin.player.spi.Player i
 
     @Override
     public void setDataSource(String path, Map<String, String> headers) {
-        mMediaSource = mMediaSourceHelper.getMediaSource(path, headers, false, errorCode);
+        // 开启边播缓存：DRM 内容在 helper 内自动排除；cache key（uri + 规范化 headers 后缀）
+        // 与 preloadNext 预读一致，下一集预读数据由此直接命中
+        mMediaSource = mMediaSourceHelper.getMediaSource(path, headers, true, errorCode);
         errorCode = -1;
+    }
+
+    // ── 下一集首屏数据预读 ──
+    // 进程内单线程：预读纯 IO（经 CacheDataSource 落盘），不创建播放器实例、不占解码器
+    private static final java.util.concurrent.ExecutorService sPreloadExecutor =
+            java.util.concurrent.Executors.newSingleThreadExecutor(r -> {
+                Thread t = new Thread(r, "bh-exo-preload");
+                t.setDaemon(true);
+                return t;
+            });
+    /** 预读目标代际：换集/取消时递增，队列中的过期任务据此跳过 */
+    private static volatile int sPreloadGeneration;
+
+    @Override
+    public boolean isPreloadSupported() {
+        return true;
+    }
+
+    @Override
+    public void preloadNext(String url, Map<String, String> headers, long positionMs) {
+        if (url == null || url.length() == 0) return;
+        final int generation = ++sPreloadGeneration;
+        final ExoMediaSourceHelper helper = mMediaSourceHelper;
+        // headers 与正式播放 setDataSource 收到的完全一致，保证 cache key 一致
+        final Map<String, String> copiedHeaders = headers == null ? null : new java.util.HashMap<>(headers);
+        sPreloadExecutor.execute(() -> {
+            if (generation != sPreloadGeneration) return; // 已被新目标/取消覆盖
+            long start = android.os.SystemClock.elapsedRealtime();
+            int bytes = helper.preload(url, copiedHeaders, ExoMediaSourceHelper.PRELOAD_MAX_BYTES, positionMs);
+            LOG.i("ExoPreload bytes=" + bytes + " pos=" + positionMs + "ms cost=" + (android.os.SystemClock.elapsedRealtime() - start) + "ms");
+        });
+    }
+
+    @Override
+    public void clearPreload() {
+        sPreloadGeneration++;
+        mMediaSourceHelper.cancelPreload();
     }
 
     @Override
@@ -246,7 +285,8 @@ public class ExoMediaPlayer extends com.github.catvod.plugin.player.spi.Player i
         if (mMediaPlayer != null) {
             mMediaPlayer.stop();
             mMediaPlayer.clearMediaItems();
-            mMediaPlayer.setVideoSurface(null);
+            //保留 Surface 绑定：换集复用路径（releaseForEpisodeSwitch→startPlay）不再重建 RenderView，
+            //旧集末帧冻结显示到新集首帧替换，消除黑屏一闪；SurfaceView 在 stop 后仍保留最后提交的帧
             mIsPreparing = false;
         }
     }
@@ -260,6 +300,7 @@ public class ExoMediaPlayer extends com.github.catvod.plugin.player.spi.Player i
 
     @Override
     public void release() {
+        clearPreload();
         if (mMediaPlayer != null) {
             mMediaPlayer.removeListener(this);
             mMediaPlayer.release();

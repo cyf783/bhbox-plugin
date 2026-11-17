@@ -10,8 +10,8 @@ android {
         applicationId "bh.box.plugin.exo"
         minSdk 23
         targetSdk rootProject.ext.targetSdk
-        versionCode 124
-        versionName "1.2.4"
+        versionCode 125
+        versionName "1.2.5"
         ndk { abiFilters "arm64-v8a" }
     }
 
@@ -38,7 +38,7 @@ android {
 }
 
 dependencies {
-    compileOnly 'com.github.cyf783:bhbox-catvod:1.0.0'
+    compileOnly 'com.github.cyf783:bhbox-catvod:1.0.6'
     implementation fileTree(dir: 'libs', include: ['*.aar'])
     // lib-datasource-rtmp-release.aar 的传递依赖：fileTree 引入本地 aar 不解析 POM，
     // 缺它会导致播放 RTMP 源时 NoClassDefFoundError: RtmpClient
