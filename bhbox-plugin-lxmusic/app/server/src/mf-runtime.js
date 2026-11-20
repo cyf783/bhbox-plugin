@@ -10,6 +10,17 @@ const crypto = require('node:crypto');
 const { URLSearchParams } = require('node:url');
 const { rawRequest } = require('./http');
 
+// MusicFree 插件生态的真实依赖（esbuild 静态打包进 bundle；cheerio/big-integer/dayjs 无 shim 可替代）
+const REAL_DEPS = {
+  'crypto-js': require('crypto-js'),
+  'iconv-lite': require('iconv-lite'),
+  'cheerio': require('cheerio'),
+  'big-integer': require('big-integer'),
+  'dayjs': require('dayjs'),
+  'he': require('he'),
+  'qs': require('qs'),
+};
+
 // ============ crypto-js 最小实现（WordArray 即 Buffer 包装；覆盖市场插件常用 MD5/AES/Base64） ============
 function makeCryptoJs() {
   // WordArray：toString 默认 Base64（与 crypto-js 一致），.buf 为底层 Buffer
@@ -123,6 +134,18 @@ function makeHe() {
 
 /** axios 最小适配层：axios(config)/axios.get/post/put/delete + .default 同体 + interceptors/defaults 空壳。
  *  params 序列化进 query；data 对象 JSON 化；响应 {data, status, headers}（data 已 JSON 解析） */
+/** 插件依赖的第三方 api 改版后响应形状矫正（脚本不改动）：
+ *  oiapi.net/Music_163 新版返回 {data:{items:[...]}}，旧版脚本期望 data 为数组 → items 数组化 */
+function normalizeMfBody(url, body) {
+  try {
+    if (body && body.code === 0 && /oiapi\.net\/api\/Music_163/.test(url)
+      && body.data && !Array.isArray(body.data) && Array.isArray(body.data.items)) {
+      return { ...body, data: body.data.items };
+    }
+  } catch { /* 保持原样 */ }
+  return body;
+}
+
 function makeAxios() {
   const instance = async (config = {}) => {
     let url = config.url || '';
@@ -145,7 +168,7 @@ function makeAxios() {
       err.response = { status: r.statusCode, data: r.body, headers: r.headers };
       throw err;
     }
-    return { data: r.body, status: r.statusCode, statusText: 'OK', headers: r.headers, config };
+    return { data: normalizeMfBody(url, r.body), status: r.statusCode, statusText: 'OK', headers: r.headers, config };
   };
   instance.request = (config) => instance(config);
   instance.get = (url, config = {}) => instance({ ...config, url, method: 'GET' });
@@ -165,14 +188,19 @@ class MFRuntime {
     this.scriptInfo = null;
   }
 
-  load(scriptPath) {
+  load(scriptPath, userVars = null) {
     const rawScript = fs.readFileSync(scriptPath, 'utf8');
+    const userVariables = userVars || {};
     const sandbox = { console, setTimeout, clearTimeout, setInterval, clearInterval, Buffer, URL, TextEncoder, TextDecoder };
     const module = { exports: {} };
     sandbox.module = module;
     sandbox.exports = module.exports;
+    // MusicFree env 全局（用户变量，如 SESSDATA；宿主站点 ext 字段经 body.ext 注入）
+    sandbox.env = { getUserVariables: () => userVariables };
     sandbox.require = (name) => {
       if (name === 'axios') return makeAxios();
+      // 真实依赖包优先（bundle 内置），缺失时用 node:crypto 实现的 shim 兜底
+      if (REAL_DEPS[name]) return REAL_DEPS[name];
       if (name === 'crypto-js') return makeCryptoJs();
       if (name === 'he') return makeHe();
       if (name === 'qs') return makeQs();
@@ -197,13 +225,13 @@ class MFRuntime {
   }
 }
 
-function loadMFPlugin(scriptPath) {
-  return new MFRuntime().load(scriptPath);
+function loadMFPlugin(scriptPath, userVars = null) {
+  return new MFRuntime().load(scriptPath, userVars);
 }
 
 /** 订阅 JSON 加载器：{plugins:[{name,url,version}]} → 各插件 js 落盘缓存（<md5(url)>.js，mtime 热加载）→ 逐一加载。
  *  返回 {type:'mf-bundle', plugins:[{id, name, version, runtime}]} */
-async function loadMFBundle(jsonPath) {
+async function loadMFBundle(jsonPath, userVars = null) {
   const raw = fs.readFileSync(jsonPath, 'utf8');
   const sub = JSON.parse(raw);
   const items = Array.isArray(sub && sub.plugins) ? sub.plugins : [];
@@ -225,7 +253,7 @@ async function loadMFBundle(jsonPath) {
       } // 下载失败回退旧缓存
     }
     try {
-      plugins.push({ id: String(plugins.length), name: item.name || ('插件' + (plugins.length + 1)), version: item.version || '', runtime: loadMFPlugin(cachePath) });
+      plugins.push({ id: String(plugins.length), name: item.name || ('插件' + (plugins.length + 1)), version: item.version || '', runtime: loadMFPlugin(cachePath, userVars) });
     } catch (e) {
       console.log('[mf bundle]', item.name || item.url, '加载失败:', e.message);
     }

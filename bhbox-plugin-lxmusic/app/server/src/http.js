@@ -22,7 +22,14 @@ function rawRequest(url, options = {}) {
       const chunks = [];
       res.on('data', (c) => chunks.push(c));
       res.on('end', () => {
-        const raw = Buffer.concat(chunks);
+        let raw = Buffer.concat(chunks);
+        // 响应压缩自动解压（插件脚本普遍带 accept-encoding 头，Node http 不自动解压）
+        const enc = String(res.headers['content-encoding'] || '').toLowerCase().trim();
+        try {
+          if (enc === 'gzip') raw = require('node:zlib').gunzipSync(raw);
+          else if (enc === 'deflate') raw = require('node:zlib').inflateSync(raw);
+          else if (enc === 'br') raw = require('node:zlib').brotliDecompressSync(raw);
+        } catch { /* 解压失败按原样继续 */ }
         const text = raw.toString('utf8').trim();
         let parsed = null;
         if (text.startsWith('{') || text.startsWith('[')) {

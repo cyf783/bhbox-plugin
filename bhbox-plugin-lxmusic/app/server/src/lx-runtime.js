@@ -187,15 +187,15 @@ class LxRuntime {
 // 引用 exports/module.exports 的脚本按 MusicFree 插件（CJS）加载；其余按 lx 自定义源协议
 const { loadMFPlugin, loadMFBundle } = require('./mf-runtime');
 
-function loadScript(scriptPath) {
+function loadScript(scriptPath, userVars = null) {
   const raw = fs.readFileSync(scriptPath, 'utf8');
   try {
     const j = JSON.parse(raw);
     if (j && Array.isArray(j.plugins) && j.plugins.length) {
-      return { type: 'mf-bundle', plugins: null, promise: loadMFBundle(scriptPath) };
+      return { type: 'mf-bundle', plugins: null, promise: loadMFBundle(scriptPath, userVars) };
     }
   } catch {}
-  if (/\b(module\.exports|exports\s*\.)/.test(raw)) return loadMFPlugin(scriptPath);
+  if (/\b(module\.exports|exports\s*\.)/.test(raw)) return loadMFPlugin(scriptPath, userVars);
   return new LxRuntime().load(scriptPath);
 }
 
