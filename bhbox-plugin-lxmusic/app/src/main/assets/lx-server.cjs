@@ -72,6 +72,96 @@ var require_http = __commonJS({
   }
 });
 
+// src/mf-runtime.js
+var require_mf_runtime = __commonJS({
+  "src/mf-runtime.js"(exports2, module2) {
+    "use strict";
+    var fs = require("node:fs");
+    var vm = require("node:vm");
+    var { URLSearchParams } = require("node:url");
+    var { rawRequest } = require_http();
+    function makeAxios() {
+      const instance = async (config = {}) => {
+        let url = config.url || "";
+        if (!/^https?:/.test(url))
+          throw new Error("axios: url 非法: " + url);
+        if (config.params && typeof config.params === "object") {
+          const qs = new URLSearchParams();
+          for (const [k, v] of Object.entries(config.params))
+            qs.append(k, String(v));
+          url += (url.includes("?") ? "&" : "?") + qs.toString();
+        }
+        const method = (config.method || "GET").toUpperCase();
+        const opt = {
+          method,
+          headers: { ...config.headers || {} },
+          timeout: config.timeout ? config.timeout / 1e3 : 15
+          // axios ms → rawRequest 秒
+        };
+        if (config.data != null && method !== "GET")
+          opt.body = config.data;
+        const r = await rawRequest(url, opt);
+        if (r.statusCode >= 400) {
+          const err = new Error("Request failed with status code " + r.statusCode);
+          err.response = { status: r.statusCode, data: r.body, headers: r.headers };
+          throw err;
+        }
+        return { data: r.body, status: r.statusCode, statusText: "OK", headers: r.headers, config };
+      };
+      instance.request = (config) => instance(config);
+      instance.get = (url, config = {}) => instance({ ...config, url, method: "GET" });
+      instance.post = (url, data, config = {}) => instance({ ...config, url, data, method: "POST" });
+      instance.put = (url, data, config = {}) => instance({ ...config, url, data, method: "PUT" });
+      instance.delete = (url, config = {}) => instance({ ...config, url, method: "DELETE" });
+      instance.default = instance;
+      instance.interceptors = { request: { use() {
+      } }, response: { use() {
+      } } };
+      instance.defaults = { headers: { common: {}, get: {}, post: {} }, timeout: 0 };
+      return instance;
+    }
+    var MFRuntime = class {
+      constructor() {
+        this.type = "mf";
+        this.plugin = null;
+        this.scriptInfo = null;
+      }
+      load(scriptPath) {
+        const rawScript = fs.readFileSync(scriptPath, "utf8");
+        const sandbox = { console, setTimeout, clearTimeout, setInterval, clearInterval, Buffer, URL, TextEncoder, TextDecoder };
+        const module3 = { exports: {} };
+        sandbox.module = module3;
+        sandbox.exports = module3.exports;
+        sandbox.require = (name) => {
+          if (name === "axios")
+            return makeAxios();
+          throw new Error("MusicFree 插件暂不支持依赖: " + name);
+        };
+        vm.createContext(sandbox);
+        vm.runInContext(rawScript, sandbox, { filename: scriptPath });
+        const p = module3.exports;
+        if (!p || typeof p.platform !== "string" || !p.platform) {
+          throw new Error("exports.platform 缺失，非 MusicFree 插件");
+        }
+        this.plugin = p;
+        this.scriptInfo = { name: p.platform, version: p.version || "", author: p.author || "", rawScript };
+        return this;
+      }
+      /** 插件函数安全调用：不存在/抛错统一返回 fallback */
+      async call(fnName, ...args) {
+        const fn = this.plugin[fnName];
+        if (typeof fn !== "function")
+          throw new Error("插件未实现: " + fnName);
+        return fn(...args);
+      }
+    };
+    function loadMFPlugin(scriptPath) {
+      return new MFRuntime().load(scriptPath);
+    }
+    module2.exports = { loadMFPlugin, makeAxios };
+  }
+});
+
 // src/lx-runtime.js
 var require_lx_runtime = __commonJS({
   "src/lx-runtime.js"(exports2, module2) {
@@ -163,6 +253,7 @@ ${val}\r
     }
     var LxRuntime = class {
       constructor() {
+        this.type = "lx";
         this.handlers = {};
         this.sources = null;
         this.inited = false;
@@ -259,7 +350,11 @@ ${val}\r
         return url;
       }
     };
+    var { loadMFPlugin } = require_mf_runtime();
     function loadScript(scriptPath) {
+      const raw = fs.readFileSync(scriptPath, "utf8");
+      if (/\b(module\.exports|exports\s*\.)/.test(raw))
+        return loadMFPlugin(scriptPath);
       return new LxRuntime().load(scriptPath);
     }
     module2.exports = { EVENT_NAMES, VERSION, loadScript };
@@ -19630,39 +19725,70 @@ var require_actions = __commonJS({
       const raw = id.startsWith("lx://") ? id.slice(5) : id;
       return JSON.parse(Buffer2.from(raw, "base64url").toString("utf8"));
     }
-    async function home(route, body) {
+    async function scriptSourceIds(runtime) {
+      try {
+        await Promise.race([runtime && runtime.initedPromise, new Promise((r) => setTimeout(r, 3e3))]);
+      } catch {
+      }
+      const s = runtime && runtime.sources;
+      if (Array.isArray(s))
+        return s.map((x) => x && (x.id || x.name)).filter(Boolean);
+      if (s && typeof s === "object")
+        return Object.keys(s);
+      return null;
+    }
+    function tryRuntime(route, sourcesDir) {
+      try {
+        return getRuntime(route, sourcesDir);
+      } catch (e) {
+        console.log("[route]", route, "脚本不可用:", e.message);
+        return null;
+      }
+    }
+    async function home(route, body, sourcesDir) {
+      const runtime = tryRuntime(route, sourcesDir);
+      if (!runtime)
+        return { class: [], filters: {}, list: [] };
+      if (runtime.type === "mf")
+        return mfHome(route, body, sourcesDir);
+      const declared = await scriptSourceIds(runtime);
+      const ids = declared && declared.length ? catalog2.CATALOGS.ids.filter((id) => declared.includes(id)) : catalog2.CATALOGS.ids;
       await Promise.race([
-        Promise.all(catalog2.CATALOGS.ids.map((id) => catalog2.songListTags(id))),
+        Promise.all(ids.map((id) => catalog2.songListTags(id))),
         new Promise((r) => setTimeout(r, 3e3))
       ]);
       const filters = {};
-      for (const id of catalog2.CATALOGS.ids) {
-        const kindFilter = {
-          key: "kind",
-          name: "类型",
-          value: [{ n: "榜单", v: "board" }, { n: "歌单", v: "songlist" }]
-        };
-        const tagFilter = {
-          key: "tag",
-          name: "歌单标签",
-          value: [{ n: "热门", v: "" }, ...catalog2.CATALOGS.tags(id).map((t) => ({ n: t.name, v: t.id }))]
-        };
-        filters[id] = [kindFilter, tagFilter];
+      for (const id of ids) {
+        filters[id] = [{
+          key: "type",
+          name: "分类",
+          value: [{ n: "榜单", v: "board" }, { n: "热门歌单", v: "" }, ...catalog2.CATALOGS.tags(id).map((t) => ({ n: t.name, v: t.id }))]
+        }];
+      }
+      let list = [];
+      try {
+        list = (await category(route, { id: ids[0], page: 1, extend: { type: "board" } }, sourcesDir)).list || [];
+      } catch {
       }
       return {
-        class: catalog2.CATALOGS.ids.map((id) => ({ type_id: id, type_name: catalog2.CATALOGS.names[id] })),
+        class: ids.map((id) => ({ type_id: id, type_name: catalog2.CATALOGS.names[id] })),
         filters,
-        list: []
-        // 宿主 AbsJson 遍历 list，空推荐位也必须给空数组
+        list
       };
     }
-    async function category(route, body) {
+    async function category(route, body, sourcesDir) {
+      const runtime = tryRuntime(route, sourcesDir);
+      if (!runtime)
+        return { list: [], page: 1, pagecount: 1, total: 0, limit: 30 };
+      if (runtime.type === "mf")
+        return mfCategory(route, body, sourcesDir);
       const page = Number(body.page) || 1;
       const platform = body.id || body.type_id || catalog2.CATALOGS.ids[0];
       const extend = body.extend || {};
+      const type = extend.type !== void 0 ? extend.type : "board";
       const port = parseInt(process.env.LX_PORT, 10) || 9920;
-      if (extend.kind === "songlist") {
-        const r = await catalog2.songLists(platform, extend.tag || "", page);
+      if (type !== "board") {
+        const r = await catalog2.songLists(platform, type || "", page);
         return {
           list: r.list.map((l) => ({
             vod_id: "sl:" + platform + ":" + encodeURIComponent(l.name) + ":" + l.id,
@@ -19690,7 +19816,12 @@ var require_actions = __commonJS({
         limit: 30
       };
     }
-    async function search(route, body) {
+    async function search(route, body, sourcesDir) {
+      const runtime = tryRuntime(route, sourcesDir);
+      if (!runtime)
+        return { list: [], page: 1, pagecount: 1, total: 0, limit: 30 };
+      if (runtime.type === "mf")
+        return mfSearch(route, body, sourcesDir);
       const wd = body.wd || "";
       const page = Number(body.page) || 1;
       if (!wd)
@@ -19709,10 +19840,14 @@ var require_actions = __commonJS({
         limit: 30
       };
     }
-    async function detail(route, body) {
+    async function detail(route, body, sourcesDir) {
+      if (!tryRuntime(route, sourcesDir))
+        return { list: [], page: 1, pagecount: 1, total: 0, limit: 1 };
       const id = Array.isArray(body.ids) ? body.ids[0] : body.ids || body.id;
       if (!id)
         return { list: [] };
+      if (/^(pl|sl|song):mf:/.test(id))
+        return mfDetail(route, id, sourcesDir);
       if (id.startsWith("pl:") || id.startsWith("sl:")) {
         const parts2 = id.split(":");
         const platform = parts2[1];
@@ -19756,6 +19891,8 @@ var require_actions = __commonJS({
     }
     async function play(route, body, sourcesDir) {
       const { flag, id } = body;
+      if (id && id.startsWith("mf://"))
+        return mfPlay(route, body, sourcesDir);
       const song = decodeId(id);
       const qualities = DEFAULT_QUALITIES.filter((q) => !flag || flag === PLAY_FLAG || flag === QUALITY_TITLES[q]);
       const runtime = getRuntime(route, sourcesDir);
@@ -19801,6 +19938,169 @@ var require_actions = __commonJS({
         out.lrc = lrc;
       if (PLATFORM_HEADERS[song.platform])
         out.header = PLATFORM_HEADERS[song.platform];
+      return out;
+    }
+    function mfEncode(item) {
+      return Buffer2.from(JSON.stringify(item), "utf8").toString("base64url");
+    }
+    function mfSongCard(item) {
+      return {
+        vod_id: "song:mf:" + mfEncode(item),
+        vod_name: item.title || item.name || String(item.id),
+        vod_pic: item.artwork || item.coverImg || item.cover || "",
+        vod_remarks: item.artist || item.singer || ""
+      };
+    }
+    async function mfHome(route, body, sourcesDir) {
+      const runtime = getRuntime(route, sourcesDir);
+      const pid = "mf";
+      const filters = {};
+      let tagVals = [];
+      try {
+        const tags = await runtime.call("getRecommendSheetTags");
+        tagVals = (tags && (tags.pinned || tags.data) || []).map((t) => ({ n: t.title || t.name || String(t.id), v: "tag:" + t.id }));
+      } catch {
+      }
+      filters[pid] = [{
+        key: "type",
+        name: "分类",
+        // 插件自带标签（首项每日推荐 id=0），避免与手工项重复
+        value: [{ n: "榜单", v: "board" }, ...tagVals]
+      }];
+      let list = [];
+      try {
+        list = (await mfCategory(route, { id: pid, page: 1, extend: { type: "board" } }, sourcesDir)).list || [];
+      } catch {
+      }
+      return { class: [{ type_id: pid, type_name: runtime.plugin.platform }], filters, list };
+    }
+    async function mfCategory(route, body, sourcesDir) {
+      const page = Number(body.page) || 1;
+      const runtime = getRuntime(route, sourcesDir);
+      const extend = body.extend || {};
+      const type = extend.type !== void 0 ? extend.type : "board";
+      if (type !== "board") {
+        const tagId = type.startsWith("tag:") ? type.slice(4) : "0";
+        if (page > 1)
+          return { list: [], page, pagecount: 1, total: 0, limit: 30 };
+        let r = null;
+        for (let i = 0; i < 6 && !(r && r.data && r.data.length); i++) {
+          if (i)
+            await new Promise((rs) => setTimeout(rs, 400));
+          try {
+            r = await runtime.call("getRecommendSheetsByTag", { id: tagId }, 1);
+          } catch {
+            r = null;
+          }
+        }
+        const seen = /* @__PURE__ */ new Set();
+        const sheets = (r && r.data || []).filter((l) => {
+          if (!l || !l.id || seen.has(String(l.id)))
+            return false;
+          seen.add(String(l.id));
+          return true;
+        });
+        return {
+          list: sheets.map((l) => ({
+            vod_id: "sl:mf:" + encodeURIComponent(l.title || l.name || "") + ":" + l.id,
+            vod_name: l.title || l.name || String(l.id),
+            vod_pic: l.artwork || l.coverImg || l.cover || "",
+            vod_remarks: (l.description || "歌单").slice(0, 40)
+          })),
+          page: 1,
+          pagecount: 1,
+          total: sheets.length,
+          limit: 30
+        };
+      }
+      const groups = await runtime.call("getTopLists");
+      const boards = (groups || []).flatMap((g) => g && g.data || []);
+      return {
+        list: boards.map((b) => ({
+          vod_id: "pl:mf:" + b.id,
+          vod_name: b.title || b.name || String(b.id),
+          vod_pic: b.coverImg || b.artwork || "",
+          vod_remarks: (b.description || "榜单").slice(0, 40)
+        })),
+        page,
+        pagecount: 1,
+        total: boards.length,
+        limit: 30
+      };
+    }
+    async function mfSearch(route, body, sourcesDir) {
+      const wd = body.wd || "";
+      const page = Number(body.page) || 1;
+      if (!wd)
+        return { list: [], page, pagecount: 1, total: 0, limit: 30 };
+      const runtime = getRuntime(route, sourcesDir);
+      const r = await runtime.call("search", wd, page, "music");
+      const data = r && r.data || [];
+      return { list: data.map(mfSongCard), page, pagecount: r && r.isEnd ? page : 999, total: data.length, limit: 30 };
+    }
+    async function mfDetail(route, id, sourcesDir) {
+      const runtime = getRuntime(route, sourcesDir);
+      const parts = id.split(":");
+      let name = "", pic = "", songs = [];
+      if (id.startsWith("pl:mf:")) {
+        const r = await runtime.call("getTopListDetail", { id: parts.slice(2).join(":") });
+        songs = r && r.musicList || [];
+        name = r && (r.title || r.name) || "榜单";
+        pic = r && (r.coverImg || r.artwork) || songs[0] && (songs[0].artwork || songs[0].coverImg) || "";
+      } else if (id.startsWith("sl:mf:")) {
+        const r = await runtime.call("getMusicSheetInfo", { id: parts.slice(3).join(":") });
+        songs = r && r.musicList || [];
+        name = parts.length > 3 ? decodeURIComponent(parts[2]) : "歌单";
+        pic = songs[0] && (songs[0].artwork || songs[0].coverImg) || "";
+      } else if (id.startsWith("song:mf:")) {
+        const item = JSON.parse(Buffer2.from(parts.slice(2).join(":"), "base64url").toString("utf8"));
+        songs = [item];
+        name = item.title || item.name || String(item.id);
+        pic = item.artwork || "";
+      } else
+        return { list: [] };
+      const playUrl = songs.map((s) => `${s.title || s.name || s.id}${s.artist ? " - " + s.artist : ""}$mf://${mfEncode(s)}`).join("#");
+      return {
+        list: [{ vod_id: id, vod_name: name, vod_pic: pic, vod_play_from: PLAY_FLAG, vod_play_url: playUrl }],
+        page: 1,
+        pagecount: 1,
+        total: 1,
+        limit: 1
+      };
+    }
+    async function mfPlay(route, body, sourcesDir) {
+      const { flag, id } = body;
+      const raw = id.startsWith("mf://") ? id.slice(5) : id.replace(/^song:mf:/, "");
+      const musicItem = JSON.parse(Buffer2.from(raw, "base64url").toString("utf8"));
+      const runtime = getRuntime(route, sourcesDir);
+      const allQ = runtime.plugin.supportedQualities || ["128k"];
+      const qualities = allQ.filter((q) => !flag || flag === PLAY_FLAG || flag === (QUALITY_TITLES[q] || q));
+      const results = await Promise.allSettled(qualities.map(async (q) => {
+        const r = await runtime.call("getMediaSource", musicItem, q);
+        const url = r && (typeof r === "string" ? r : r.url);
+        if (typeof url !== "string" || !/^https?:/.test(url) || url.length > 2048)
+          throw new Error("解析结果非法");
+        return { q, url };
+      }));
+      const urls = [];
+      for (const r of results) {
+        if (r.status === "fulfilled")
+          urls.push(QUALITY_TITLES[r.value.q] || r.value.q, r.value.url);
+        else
+          console.log("[mf play] 音质失败", r.reason && r.reason.message);
+      }
+      if (!urls.length)
+        return { flag: PLAY_FLAG, parse: 0, jx: 0, isMusic: true, url: "" };
+      const out = { flag: flag || PLAY_FLAG, parse: 0, jx: 0, isMusic: true, url: urls };
+      if (musicItem.artwork)
+        out.pic = musicItem.artwork;
+      try {
+        const l = await runtime.call("getLyric", musicItem);
+        const lrc = l && (l.rawLrc || l.krc || l.lrc);
+        if (lrc)
+          out.lrc = lrc;
+      } catch {
+      }
       return out;
     }
     var ACTIONS = { home, category, search, detail, play };

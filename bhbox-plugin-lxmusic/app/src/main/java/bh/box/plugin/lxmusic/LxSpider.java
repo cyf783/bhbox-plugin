@@ -105,6 +105,7 @@ public class LxSpider extends Spider {
 
         if (!sourceFile.exists()) {
             try {
+                LxMusicPlugin.sourceCache.mkdirs(); // cache 目录可能被系统清理，落盘前重建
                 if (localSrc != null) {
                     Io.copy(localSrc, sourceFile);
                 } else {

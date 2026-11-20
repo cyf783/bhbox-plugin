@@ -6,8 +6,8 @@
   "spider": "lx",
   "mainClass": "bh.box.plugin.lxmusic.LxMusicPlugin",
   "downloadUrl": "https://h-box-release.netlify.app/release/plugins/lxmusic.apk",
-  "version": 100,
-  "versionName": "1.0.0",
+  "version": 101,
+  "versionName": "1.0.1",
   "minSdk": 23,
   "minAppVersion": 383,
   "depends": ["bh.box.plugin.node"]
