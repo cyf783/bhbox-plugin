@@ -69,7 +69,14 @@ public class ClearKeyExtractorPlugin implements IExtractorPlugin {
 
     @Override
     public boolean canPlay(String url) {
-        if (TextUtils.isEmpty(url) || !url.contains(KodipropParser.PROP_MARKER)) return false;
+        if (TextUtils.isEmpty(url)) return false;
+        // drm:// 写源协议（红果/番茄短剧载荷）：仅当载荷带有效密钥时接管
+        // （无密钥=明文直链，不拦截，原样透传任意内核）
+        if (url.startsWith(DrmPayload.SCHEME)) {
+            DrmPayload payload = DrmPayload.parse(url);
+            return payload != null && payload.keys != null;
+        }
+        if (!url.contains(KodipropParser.PROP_MARKER)) return false;
         KodipropParser parsed = KodipropParser.parse(url);
         if (parsed == null) return false;
         String type = parsed.props.get("license_type");
@@ -91,6 +98,19 @@ public class ClearKeyExtractorPlugin implements IExtractorPlugin {
 
     @Override
     public String getUrl(String url) throws AppException {
+        // drm:// 载荷：解析后转译为 KODIPROP URL 再走统一拦截链路
+        // （unfragmented → 本地解密代理；fMP4 → 原样返回，EXO 原生处理）
+        if (url != null && url.startsWith(DrmPayload.SCHEME)) {
+            DrmPayload payload = DrmPayload.parse(url);
+            if (payload == null) return url;
+            if (payload.keys == null) {
+                LOG.i(TAG, "drm:// 载荷无密钥，按明文直链透传: " + payload.url);
+                return payload.url;
+            }
+            String translated = payload.toKodipropUrl();
+            LOG.i(TAG, "drm:// 转译 KODIPROP: " + translated);
+            url = translated;
+        }
         KodipropParser parsed = KodipropParser.parse(url);
         if (parsed == null) return url;
         Map<String, byte[]> keys = KodipropParser.parseClearKeys(parsed.props.get("license_key"));
@@ -162,16 +182,20 @@ public class ClearKeyExtractorPlugin implements IExtractorPlugin {
         return "http://127.0.0.1:" + port + "/ck/" + id;
     }
 
-    /** 播放 headers：common → stream → license 依次覆盖（与 EXO 插件合并顺序一致） */
+    /** 播放 headers：common → stream → license 依次覆盖（与 EXO 插件合并顺序一致）；
+     *  缺 UA 补 DEFAULT_UA（红果 App UA，经 TestParallel 端到端验证），缺 Referer 补红果视频 Referer */
     private Map<String, String> downloadHeaders(KodipropParser parsed) {
         Map<String, String> headers = KodipropParser.parseJsonHeaders(parsed.props.get("common_headers"));
         headers.putAll(KodipropParser.parseJsonHeaders(parsed.props.get("stream_headers")));
         headers.putAll(KodipropParser.parseJsonHeaders(parsed.props.get("license_headers")));
         boolean hasUa = false;
+        boolean hasReferer = false;
         for (String name : headers.keySet()) {
             if ("User-Agent".equalsIgnoreCase(name)) hasUa = true;
+            if ("Referer".equalsIgnoreCase(name)) hasReferer = true;
         }
         if (!hasUa) headers.put("User-Agent", DEFAULT_UA);
+        if (!hasReferer) headers.put("Referer", DrmPayload.DEFAULT_REFERER);
         return headers;
     }
 
