@@ -183,11 +183,18 @@ class LxRuntime {
   }
 }
 
-// 协议分流：引用 exports/module.exports 的脚本按 MusicFree 插件（CJS）加载，其余按 lx 自定义源协议
-const { loadMFPlugin } = require('./mf-runtime');
+// 协议分流：订阅 JSON（{plugins:[...]}）→ 多插件聚合（异步惰性加载，见 mfEnsure）；
+// 引用 exports/module.exports 的脚本按 MusicFree 插件（CJS）加载；其余按 lx 自定义源协议
+const { loadMFPlugin, loadMFBundle } = require('./mf-runtime');
 
 function loadScript(scriptPath) {
   const raw = fs.readFileSync(scriptPath, 'utf8');
+  try {
+    const j = JSON.parse(raw);
+    if (j && Array.isArray(j.plugins) && j.plugins.length) {
+      return { type: 'mf-bundle', plugins: null, promise: loadMFBundle(scriptPath) };
+    }
+  } catch {}
   if (/\b(module\.exports|exports\s*\.)/.test(raw)) return loadMFPlugin(scriptPath);
   return new LxRuntime().load(scriptPath);
 }

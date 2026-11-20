@@ -77,9 +77,149 @@ var require_mf_runtime = __commonJS({
   "src/mf-runtime.js"(exports2, module2) {
     "use strict";
     var fs = require("node:fs");
+    var path = require("node:path");
     var vm = require("node:vm");
+    var crypto = require("node:crypto");
     var { URLSearchParams } = require("node:url");
     var { rawRequest } = require_http();
+    function makeCryptoJs() {
+      class WA {
+        constructor(buf) {
+          this.buf = Buffer.isBuffer(buf) ? buf : Buffer.from(buf);
+        }
+        toString(encObj) {
+          if (encObj === CJS.enc.Hex)
+            return this.buf.toString("hex");
+          if (encObj === CJS.enc.Utf8)
+            return this.buf.toString("utf8");
+          if (encObj === CJS.enc.Latin1)
+            return this.buf.toString("latin1");
+          return this.buf.toString("base64");
+        }
+        toJSON() {
+          return this.buf.toString("base64");
+        }
+      }
+      const toBuf = (v) => v instanceof WA ? v.buf : typeof v === "string" ? Buffer.from(v, "utf8") : Buffer.from(v);
+      const hash = (alg) => (msg) => new WA(crypto.createHash(alg).update(toBuf(msg)).digest());
+      const hmac = (alg) => (msg, key) => new WA(crypto.createHmac(alg, toBuf(key)).update(toBuf(msg)).digest());
+      const mode = { ECB: { name: "ecb" }, CBC: { name: "cbc" }, CFB: { name: "cfb" }, CTR: { name: "ctr" }, OFB: { name: "ofb" } };
+      const pad = { Pkcs7: { name: "pkcs7" }, NoPadding: { name: "none" }, Iso10126: { name: "pkcs7" }, AnsiX923: { name: "pkcs7" } };
+      function aesOpts(opts) {
+        const o = opts || {};
+        const m = o.mode && o.mode.name || "cbc";
+        const p = o.padding && o.padding.name || "pkcs7";
+        const iv = o.iv ? toBuf(o.iv).subarray(0, 16) : void 0;
+        return { m, p, iv };
+      }
+      const CJS = {
+        MD5: hash("md5"),
+        SHA1: hash("sha1"),
+        SHA256: hash("sha256"),
+        SHA512: hash("sha512"),
+        SHA3: hash("sha3-256"),
+        HmacMD5: hmac("md5"),
+        HmacSHA1: hmac("sha1"),
+        HmacSHA256: hmac("sha256"),
+        HmacSHA512: hmac("sha512"),
+        AES: {
+          encrypt(msg, key, opts) {
+            const { m, p, iv } = aesOpts(opts);
+            const alg = "aes-128-" + m;
+            const data = toBuf(msg);
+            const autoPad = p === "pkcs7";
+            const cipher = crypto.createCipheriv(alg, toBuf(key).subarray(0, 16), m === "ecb" ? null : iv || Buffer.alloc(16), { autoPad });
+            const out = Buffer.concat([cipher.update(data), cipher.final()]);
+            return { ciphertext: new WA(out), toString: (e) => e === CJS.enc.Hex ? out.toString("hex") : out.toString("base64") };
+          },
+          decrypt(cipherText, key, opts) {
+            const { m, p, iv } = aesOpts(opts);
+            const alg = "aes-128-" + m;
+            const ct = typeof cipherText === "string" ? cipherText.startsWith("Salted__") ? Buffer.from(cipherText, "base64").subarray(16) : Buffer.from(cipherText, "base64") : toBuf(cipherText);
+            const autoPad = p === "pkcs7";
+            const decipher = crypto.createDecipheriv(alg, toBuf(key).subarray(0, 16), m === "ecb" ? null : iv || Buffer.alloc(16), { autoPad });
+            const out = Buffer.concat([decipher.update(ct), decipher.final()]);
+            return { toString: (e) => e === CJS.enc.Hex ? out.toString("hex") : out.toString("utf8"), ciphertext: new WA(out) };
+          }
+        },
+        enc: {
+          Utf8: {},
+          Latin1: {},
+          Hex: {},
+          Base64: {}
+        },
+        lib: { WordArray: { create(buf) {
+          return new WA(Buffer.from(buf));
+        } } },
+        mode,
+        pad,
+        format: { OpenSSL: {} }
+      };
+      CJS.enc.Utf8.parse = (s) => new WA(Buffer.from(String(s), "utf8"));
+      CJS.enc.Utf8.stringify = (w) => w.buf.toString("utf8");
+      CJS.enc.Hex.parse = (s) => new WA(Buffer.from(String(s), "hex"));
+      CJS.enc.Hex.stringify = (w) => w.buf.toString("hex");
+      CJS.enc.Base64.parse = (s) => new WA(Buffer.from(String(s), "base64"));
+      CJS.enc.Base64.stringify = (w) => w.buf.toString("base64");
+      CJS.enc.Latin1.parse = (s) => new WA(Buffer.from(String(s), "latin1"));
+      CJS.enc.Latin1.stringify = (w) => w.buf.toString("latin1");
+      return CJS;
+    }
+    function makeQs() {
+      const qs = {
+        stringify(obj) {
+          const p = new URLSearchParams();
+          for (const [k, v] of Object.entries(obj || {})) {
+            if (v === void 0 || v === null)
+              continue;
+            if (Array.isArray(v))
+              v.forEach((x) => p.append(k, String(x)));
+            else
+              p.append(k, String(v));
+          }
+          return p.toString();
+        },
+        parse(str) {
+          const out = {};
+          for (const [k, v] of new URLSearchParams(String(str || "")))
+            out[k] = v;
+          return out;
+        }
+      };
+      qs.encode = qs.stringify;
+      qs.decode = qs.parse;
+      return qs;
+    }
+    function makeHe() {
+      const NAMED = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " ", copy: "©", reg: "®", mdash: "—", ndash: "–", hellip: "…", middot: "·", laquo: "«", raquo: "»", deg: "°", plusmn: "±", times: "×", divide: "÷" };
+      return {
+        decode(s) {
+          if (typeof s !== "string")
+            return s;
+          return s.replace(/&#x([0-9a-f]+);/gi, (_, h) => {
+            try {
+              return String.fromCodePoint(parseInt(h, 16));
+            } catch {
+              return "";
+            }
+          }).replace(/&#(\d+);/g, (_, d) => {
+            try {
+              return String.fromCodePoint(parseInt(d, 10));
+            } catch {
+              return "";
+            }
+          }).replace(/&([a-z]+);/gi, (_, n) => NAMED[n.toLowerCase()] || "&");
+        },
+        encode(s) {
+          if (typeof s !== "string")
+            return s;
+          return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&apos;" })[c]);
+        },
+        escape: function(s) {
+          return makeHe().encode(s);
+        }
+      };
+    }
     function makeAxios() {
       const instance = async (config = {}) => {
         let url = config.url || "";
@@ -135,6 +275,12 @@ var require_mf_runtime = __commonJS({
         sandbox.require = (name) => {
           if (name === "axios")
             return makeAxios();
+          if (name === "crypto-js")
+            return makeCryptoJs();
+          if (name === "he")
+            return makeHe();
+          if (name === "qs")
+            return makeQs();
           throw new Error("MusicFree 插件暂不支持依赖: " + name);
         };
         vm.createContext(sandbox);
@@ -158,7 +304,41 @@ var require_mf_runtime = __commonJS({
     function loadMFPlugin(scriptPath) {
       return new MFRuntime().load(scriptPath);
     }
-    module2.exports = { loadMFPlugin, makeAxios };
+    async function loadMFBundle(jsonPath) {
+      const raw = fs.readFileSync(jsonPath, "utf8");
+      const sub = JSON.parse(raw);
+      const items = Array.isArray(sub && sub.plugins) ? sub.plugins : [];
+      if (!items.length)
+        throw new Error("订阅 JSON 无 plugins 列表");
+      const cacheDir = path.dirname(jsonPath);
+      const plugins = [];
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        if (!item || !item.url)
+          continue;
+        const cachePath = path.join(cacheDir, require("node:crypto").createHash("md5").update(item.url).digest("hex") + ".js");
+        try {
+          const r = await rawRequest(item.url, { timeout: 20 });
+          if (r.statusCode !== 200 || !r.raw.length)
+            throw new Error("HTTP " + r.statusCode);
+          fs.writeFileSync(cachePath, r.raw);
+        } catch (e) {
+          if (!fs.existsSync(cachePath)) {
+            console.log("[mf bundle]", item.name || item.url, "下载失败:", e.message);
+            continue;
+          }
+        }
+        try {
+          plugins.push({ id: String(plugins.length), name: item.name || "插件" + (plugins.length + 1), version: item.version || "", runtime: loadMFPlugin(cachePath) });
+        } catch (e) {
+          console.log("[mf bundle]", item.name || item.url, "加载失败:", e.message);
+        }
+      }
+      if (!plugins.length)
+        throw new Error("订阅内无可用插件");
+      return { type: "mf-bundle", plugins };
+    }
+    module2.exports = { loadMFPlugin, makeAxios, loadMFBundle };
   }
 });
 
@@ -350,9 +530,16 @@ ${val}\r
         return url;
       }
     };
-    var { loadMFPlugin } = require_mf_runtime();
+    var { loadMFPlugin, loadMFBundle } = require_mf_runtime();
     function loadScript(scriptPath) {
       const raw = fs.readFileSync(scriptPath, "utf8");
+      try {
+        const j = JSON.parse(raw);
+        if (j && Array.isArray(j.plugins) && j.plugins.length) {
+          return { type: "mf-bundle", plugins: null, promise: loadMFBundle(scriptPath) };
+        }
+      } catch {
+      }
       if (/\b(module\.exports|exports\s*\.)/.test(raw))
         return loadMFPlugin(scriptPath);
       return new LxRuntime().load(scriptPath);
@@ -19749,7 +19936,7 @@ var require_actions = __commonJS({
       const runtime = tryRuntime(route, sourcesDir);
       if (!runtime)
         return { class: [], filters: {}, list: [] };
-      if (runtime.type === "mf")
+      if (runtime.type === "mf" || runtime.type === "mf-bundle")
         return mfHome(route, body, sourcesDir);
       const declared = await scriptSourceIds(runtime);
       const ids = declared && declared.length ? catalog2.CATALOGS.ids.filter((id) => declared.includes(id)) : catalog2.CATALOGS.ids;
@@ -19780,7 +19967,7 @@ var require_actions = __commonJS({
       const runtime = tryRuntime(route, sourcesDir);
       if (!runtime)
         return { list: [], page: 1, pagecount: 1, total: 0, limit: 30 };
-      if (runtime.type === "mf")
+      if (runtime.type === "mf" || runtime.type === "mf-bundle")
         return mfCategory(route, body, sourcesDir);
       const page = Number(body.page) || 1;
       const platform = body.id || body.type_id || catalog2.CATALOGS.ids[0];
@@ -19820,7 +20007,7 @@ var require_actions = __commonJS({
       const runtime = tryRuntime(route, sourcesDir);
       if (!runtime)
         return { list: [], page: 1, pagecount: 1, total: 0, limit: 30 };
-      if (runtime.type === "mf")
+      if (runtime.type === "mf" || runtime.type === "mf-bundle")
         return mfSearch(route, body, sourcesDir);
       const wd = body.wd || "";
       const page = Number(body.page) || 1;
@@ -19846,7 +20033,7 @@ var require_actions = __commonJS({
       const id = Array.isArray(body.ids) ? body.ids[0] : body.ids || body.id;
       if (!id)
         return { list: [] };
-      if (/^(pl|sl|song):mf:/.test(id))
+      if (/^(pl|sl|song):\d*:mf:/.test(id))
         return mfDetail(route, id, sourcesDir);
       if (id.startsWith("pl:") || id.startsWith("sl:")) {
         const parts2 = id.split(":");
@@ -19943,40 +20130,58 @@ var require_actions = __commonJS({
     function mfEncode(item) {
       return Buffer2.from(JSON.stringify(item), "utf8").toString("base64url");
     }
-    function mfSongCard(item) {
+    async function mfEnsure(route, sourcesDir) {
+      const runtime = tryRuntime(route, sourcesDir);
+      if (!runtime)
+        throw new Error("脚本不可用");
+      if (runtime.type === "mf")
+        return [{ id: "0", name: runtime.plugin && runtime.plugin.platform || "插件", runtime }];
+      if (runtime.type === "mf-bundle") {
+        if (!runtime.plugins) {
+          const bundle = await runtime.promise.catch((e) => {
+            throw new Error("订阅加载失败: " + e.message);
+          });
+          runtime.plugins = bundle.plugins;
+        }
+        return runtime.plugins;
+      }
+      throw new Error("非 MusicFree 源");
+    }
+    function mfSongCard(item, pid) {
       return {
-        vod_id: "song:mf:" + mfEncode(item),
+        vod_id: "song:" + pid + ":mf:" + mfEncode(item),
         vod_name: item.title || item.name || String(item.id),
         vod_pic: item.artwork || item.coverImg || item.cover || "",
         vod_remarks: item.artist || item.singer || ""
       };
     }
     async function mfHome(route, body, sourcesDir) {
-      const runtime = getRuntime(route, sourcesDir);
-      const pid = "mf";
+      const plugins = await mfEnsure(route, sourcesDir);
       const filters = {};
-      let tagVals = [];
-      try {
-        const tags = await runtime.call("getRecommendSheetTags");
-        tagVals = (tags && (tags.pinned || tags.data) || []).map((t) => ({ n: t.title || t.name || String(t.id), v: "tag:" + t.id }));
-      } catch {
-      }
-      filters[pid] = [{
-        key: "type",
-        name: "分类",
-        // 插件自带标签（首项每日推荐 id=0），避免与手工项重复
-        value: [{ n: "榜单", v: "board" }, ...tagVals]
-      }];
+      await Promise.all(plugins.map(async (p) => {
+        let vals = [{ n: "榜单", v: "board" }];
+        try {
+          const tags = await Promise.race([p.runtime.call("getRecommendSheetTags"), new Promise((r) => setTimeout(r, 2e3))]);
+          vals = vals.concat((tags && (tags.pinned || tags.data) || []).map((t) => ({ n: t.title || t.name || String(t.id), v: "tag:" + t.id })));
+        } catch {
+        }
+        filters[p.id] = [{ key: "type", name: "分类", value: vals }];
+      }));
       let list = [];
       try {
-        list = (await mfCategory(route, { id: pid, page: 1, extend: { type: "board" } }, sourcesDir)).list || [];
+        list = (await mfCategory(route, { id: plugins[0].id, page: 1, extend: { type: "board" } }, sourcesDir)).list || [];
       } catch {
       }
-      return { class: [{ type_id: pid, type_name: runtime.plugin.platform }], filters, list };
+      return { class: plugins.map((p) => ({ type_id: p.id, type_name: p.name })), filters, list };
     }
     async function mfCategory(route, body, sourcesDir) {
       const page = Number(body.page) || 1;
-      const runtime = getRuntime(route, sourcesDir);
+      const plugins = await mfEnsure(route, sourcesDir);
+      const pid = body.id !== void 0 ? String(body.id) : "0";
+      const plugin = plugins.find((p) => p.id === pid) || plugins[0];
+      const runtime = plugin.runtime;
+      const prefix = "pl:" + plugin.id + ":mf:";
+      const slPrefix = "sl:" + plugin.id + ":mf:";
       const extend = body.extend || {};
       const type = extend.type !== void 0 ? extend.type : "board";
       if (type !== "board") {
@@ -20002,7 +20207,7 @@ var require_actions = __commonJS({
         });
         return {
           list: sheets.map((l) => ({
-            vod_id: "sl:mf:" + encodeURIComponent(l.title || l.name || "") + ":" + l.id,
+            vod_id: slPrefix + encodeURIComponent(l.title || l.name || "") + ":" + l.id,
             vod_name: l.title || l.name || String(l.id),
             vod_pic: l.artwork || l.coverImg || l.cover || "",
             vod_remarks: (l.description || "歌单").slice(0, 40)
@@ -20017,7 +20222,7 @@ var require_actions = __commonJS({
       const boards = (groups || []).flatMap((g) => g && g.data || []);
       return {
         list: boards.map((b) => ({
-          vod_id: "pl:mf:" + b.id,
+          vod_id: prefix + b.id,
           vod_name: b.title || b.name || String(b.id),
           vod_pic: b.coverImg || b.artwork || "",
           vod_remarks: (b.description || "榜单").slice(0, 40)
@@ -20033,33 +20238,68 @@ var require_actions = __commonJS({
       const page = Number(body.page) || 1;
       if (!wd)
         return { list: [], page, pagecount: 1, total: 0, limit: 30 };
-      const runtime = getRuntime(route, sourcesDir);
-      const r = await runtime.call("search", wd, page, "music");
-      const data = r && r.data || [];
-      return { list: data.map(mfSongCard), page, pagecount: r && r.isEnd ? page : 999, total: data.length, limit: 30 };
+      const plugins = await mfEnsure(route, sourcesDir);
+      const rs = await Promise.allSettled(plugins.map(async (p) => {
+        const r = await Promise.race([
+          p.runtime.call("search", wd, page, "music"),
+          new Promise((res) => setTimeout(() => res(null), 8e3))
+        ]);
+        const data = r && r.data || [];
+        return data.slice(0, 15).map((s) => {
+          const c = mfSongCard(s, p.id);
+          c.vod_remarks = s.artist || s.singer ? p.name + " · " + (s.artist || s.singer) : p.name;
+          return c;
+        });
+      }));
+      const lists = rs.filter((r) => r.status === "fulfilled" && Array.isArray(r.value)).map((r) => r.value);
+      rs.forEach((r, i) => {
+        if (r.status === "rejected")
+          console.log("[mf search]", plugins[i] && plugins[i].name, "失败:", r.reason && (r.reason.message || r.reason));
+      });
+      const merged = [];
+      for (let i = 0; merged.length < 30; i++) {
+        let added = false;
+        for (const l of lists)
+          if (i < l.length) {
+            merged.push(l[i]);
+            added = true;
+          }
+        if (!added)
+          break;
+      }
+      return { list: merged, page, pagecount: 1, total: merged.length, limit: 30 };
     }
     async function mfDetail(route, id, sourcesDir) {
-      const runtime = getRuntime(route, sourcesDir);
-      const parts = id.split(":");
+      const plugins = await mfEnsure(route, sourcesDir);
+      let pid = "0", rest = id;
+      const m = id.match(/^(pl|sl|song):(\d+):mf:(.+)$/);
+      if (m) {
+        pid = m[2];
+        rest = m[1] + ":mf:" + m[3];
+      } else if (!/^(pl|sl|song):mf:/.test(id))
+        return { list: [] };
+      const plugin = plugins.find((p) => p.id === pid) || plugins[0];
+      const runtime = plugin.runtime;
+      const parts = rest.split(":");
       let name = "", pic = "", songs = [];
-      if (id.startsWith("pl:mf:")) {
+      if (rest.startsWith("pl:mf:")) {
         const r = await runtime.call("getTopListDetail", { id: parts.slice(2).join(":") });
         songs = r && r.musicList || [];
         name = r && (r.title || r.name) || "榜单";
         pic = r && (r.coverImg || r.artwork) || songs[0] && (songs[0].artwork || songs[0].coverImg) || "";
-      } else if (id.startsWith("sl:mf:")) {
+      } else if (rest.startsWith("sl:mf:")) {
         const r = await runtime.call("getMusicSheetInfo", { id: parts.slice(3).join(":") });
         songs = r && r.musicList || [];
         name = parts.length > 3 ? decodeURIComponent(parts[2]) : "歌单";
         pic = songs[0] && (songs[0].artwork || songs[0].coverImg) || "";
-      } else if (id.startsWith("song:mf:")) {
+      } else if (rest.startsWith("song:mf:")) {
         const item = JSON.parse(Buffer2.from(parts.slice(2).join(":"), "base64url").toString("utf8"));
         songs = [item];
         name = item.title || item.name || String(item.id);
         pic = item.artwork || "";
       } else
         return { list: [] };
-      const playUrl = songs.map((s) => `${s.title || s.name || s.id}${s.artist ? " - " + s.artist : ""}$mf://${mfEncode(s)}`).join("#");
+      const playUrl = songs.map((s) => `${s.title || s.name || s.id}${s.artist ? " - " + s.artist : ""}$mf://${plugin.id}/${mfEncode(s)}`).join("#");
       return {
         list: [{ vod_id: id, vod_name: name, vod_pic: pic, vod_play_from: PLAY_FLAG, vod_play_url: playUrl }],
         page: 1,
@@ -20070,9 +20310,25 @@ var require_actions = __commonJS({
     }
     async function mfPlay(route, body, sourcesDir) {
       const { flag, id } = body;
-      const raw = id.startsWith("mf://") ? id.slice(5) : id.replace(/^song:mf:/, "");
+      let pid = "0", raw;
+      if (id.startsWith("mf://")) {
+        raw = id.slice(5);
+        const s = raw.indexOf("/");
+        if (s > -1) {
+          pid = raw.slice(0, s);
+          raw = raw.slice(s + 1);
+        }
+      } else {
+        const m = id.match(/^song:(\d+):mf:(.+)$/);
+        if (m) {
+          pid = m[1];
+          raw = m[2];
+        } else
+          raw = id.replace(/^song:mf:/, "");
+      }
       const musicItem = JSON.parse(Buffer2.from(raw, "base64url").toString("utf8"));
-      const runtime = getRuntime(route, sourcesDir);
+      const plugins = await mfEnsure(route, sourcesDir);
+      const runtime = (plugins.find((p) => p.id === pid) || plugins[0]).runtime;
       const allQ = runtime.plugin.supportedQualities || ["128k"];
       const qualities = allQ.filter((q) => !flag || flag === PLAY_FLAG || flag === (QUALITY_TITLES[q] || q));
       const results = await Promise.allSettled(qualities.map(async (q) => {

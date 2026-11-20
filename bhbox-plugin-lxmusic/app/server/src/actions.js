@@ -64,7 +64,7 @@ function tryRuntime(route, sourcesDir) {
 async function home(route, body, sourcesDir) {
   const runtime = tryRuntime(route, sourcesDir);
   if (!runtime) return { class: [], filters: {}, list: [] };
-  if (runtime.type === 'mf') return mfHome(route, body, sourcesDir);
+  if (runtime.type === 'mf' || runtime.type === 'mf-bundle') return mfHome(route, body, sourcesDir);
   const declared = await scriptSourceIds(runtime);
   const ids = declared && declared.length
     ? catalog.CATALOGS.ids.filter((id) => declared.includes(id))
@@ -96,7 +96,7 @@ async function home(route, body, sourcesDir) {
 async function category(route, body, sourcesDir) {
   const runtime = tryRuntime(route, sourcesDir);
   if (!runtime) return { list: [], page: 1, pagecount: 1, total: 0, limit: 30 };
-  if (runtime.type === 'mf') return mfCategory(route, body, sourcesDir);
+  if (runtime.type === 'mf' || runtime.type === 'mf-bundle') return mfCategory(route, body, sourcesDir);
   const page = Number(body.page) || 1;
   const platform = body.id || body.type_id || catalog.CATALOGS.ids[0];
   const extend = body.extend || {};
@@ -130,7 +130,7 @@ async function category(route, body, sourcesDir) {
 async function search(route, body, sourcesDir) {
   const runtime = tryRuntime(route, sourcesDir);
   if (!runtime) return { list: [], page: 1, pagecount: 1, total: 0, limit: 30 };
-  if (runtime.type === 'mf') return mfSearch(route, body, sourcesDir);
+  if (runtime.type === 'mf' || runtime.type === 'mf-bundle') return mfSearch(route, body, sourcesDir);
   const wd = body.wd || '';
   const page = Number(body.page) || 1;
   if (!wd) return { list: [], page, pagecount: 1, total: 0, limit: 30 };
@@ -151,7 +151,7 @@ async function detail(route, body, sourcesDir) {
   if (!tryRuntime(route, sourcesDir)) return { list: [], page: 1, pagecount: 1, total: 0, limit: 1 };
   const id = Array.isArray(body.ids) ? body.ids[0] : (body.ids || body.id);
   if (!id) return { list: [] };
-  if (/^(pl|sl|song):mf:/.test(id)) return mfDetail(route, id, sourcesDir);
+  if (/^(pl|sl|song):\d*:mf:/.test(id)) return mfDetail(route, id, sourcesDir);
   if (id.startsWith('pl:') || id.startsWith('sl:')) {
     const parts = id.split(':');
     const platform = parts[1];
@@ -232,47 +232,64 @@ async function play(route, body, sourcesDir) {
   return out;
 }
 
-// ============ MusicFree 插件协议分支（runtime.type==='mf'，见 mf-runtime.js）============
-// id 约定：分类 'mf'；榜单 'pl:mf:<id>'；歌单 'sl:mf:<name>:<id>'；单曲 'song:mf:<b64url(musicItem)>'；点播 'mf://<b64url(musicItem)>'
+// ============ MusicFree 插件协议分支（runtime.type==='mf' 单插件 / 'mf-bundle' 订阅多插件，见 mf-runtime.js）============
+// id 约定（pid = 站点内插件序号，单插件恒为 '0'）：
+// 分类 pid；榜单 'pl:<pid>:mf:<id>'；歌单 'sl:<pid>:mf:<name>:<id>'；单曲 'song:<pid>:mf:<b64url(musicItem)>'；点播 'mf://<pid>/<b64url>'
 
 function mfEncode(item) {
   return Buffer.from(JSON.stringify(item), 'utf8').toString('base64url');
 }
 
-function mfSongCard(item) {
+/** 统一插件列表：单插件 → [{id:'0'}]；订阅 bundle → 惰性 await 下载+加载结果（失败抛错 → 空站） */
+async function mfEnsure(route, sourcesDir) {
+  const runtime = tryRuntime(route, sourcesDir);
+  if (!runtime) throw new Error('脚本不可用');
+  if (runtime.type === 'mf') return [{ id: '0', name: (runtime.plugin && runtime.plugin.platform) || '插件', runtime }];
+  if (runtime.type === 'mf-bundle') {
+    if (!runtime.plugins) {
+      const bundle = await runtime.promise.catch((e) => { throw new Error('订阅加载失败: ' + e.message); });
+      runtime.plugins = bundle.plugins;
+    }
+    return runtime.plugins;
+  }
+  throw new Error('非 MusicFree 源');
+}
+
+function mfSongCard(item, pid) {
   return {
-    vod_id: 'song:mf:' + mfEncode(item),
+    vod_id: 'song:' + pid + ':mf:' + mfEncode(item),
     vod_name: item.title || item.name || String(item.id),
     vod_pic: item.artwork || item.coverImg || item.cover || '',
     vod_remarks: item.artist || item.singer || '',
   };
 }
 
-/** mf home：class = 插件 platform 单分类；filter = 榜单 + 歌单标签；list = 榜单卡片 */
+/** mf home：class = 各插件（订阅内多插件）；filter = 榜单 + 各插件歌单标签（2s 限时）；list = 第一个插件榜单 */
 async function mfHome(route, body, sourcesDir) {
-  const runtime = getRuntime(route, sourcesDir);
-  const pid = 'mf';
+  const plugins = await mfEnsure(route, sourcesDir);
   const filters = {};
-  let tagVals = [];
-  try {
-    const tags = await runtime.call('getRecommendSheetTags');
-    tagVals = ((tags && (tags.pinned || tags.data)) || [])
-      .map((t) => ({ n: t.title || t.name || String(t.id), v: 'tag:' + t.id }));
-  } catch {}
-  filters[pid] = [{
-    key: 'type', name: '分类',
-    // 插件自带标签（首项每日推荐 id=0），避免与手工项重复
-    value: [{ n: '榜单', v: 'board' }, ...tagVals],
-  }];
+  await Promise.all(plugins.map(async (p) => {
+    let vals = [{ n: '榜单', v: 'board' }];
+    try {
+      const tags = await Promise.race([p.runtime.call('getRecommendSheetTags'), new Promise((r) => setTimeout(r, 2000))]);
+      vals = vals.concat(((tags && (tags.pinned || tags.data)) || []).map((t) => ({ n: t.title || t.name || String(t.id), v: 'tag:' + t.id })));
+    } catch {}
+    filters[p.id] = [{ key: 'type', name: '分类', value: vals }];
+  }));
   let list = [];
-  try { list = (await mfCategory(route, { id: pid, page: 1, extend: { type: 'board' } }, sourcesDir)).list || []; } catch {}
-  return { class: [{ type_id: pid, type_name: runtime.plugin.platform }], filters, list };
+  try { list = (await mfCategory(route, { id: plugins[0].id, page: 1, extend: { type: 'board' } }, sourcesDir)).list || []; } catch {}
+  return { class: plugins.map((p) => ({ type_id: p.id, type_name: p.name })), filters, list };
 }
 
-/** mf category：type='board' → getTopLists 拍平榜单卡片（coverImg 直出，无需 /cover 中转）；否则 getRecommendSheetsByTag */
+/** mf category：body.id=插件序号；type='board' → getTopLists 拍平榜单卡片；否则 getRecommendSheetsByTag */
 async function mfCategory(route, body, sourcesDir) {
   const page = Number(body.page) || 1;
-  const runtime = getRuntime(route, sourcesDir);
+  const plugins = await mfEnsure(route, sourcesDir);
+  const pid = body.id !== undefined ? String(body.id) : '0';
+  const plugin = plugins.find((p) => p.id === pid) || plugins[0];
+  const runtime = plugin.runtime;
+  const prefix = 'pl:' + plugin.id + ':mf:';
+  const slPrefix = 'sl:' + plugin.id + ':mf:';
   const extend = body.extend || {};
   const type = extend.type !== undefined ? extend.type : 'board';
   if (type !== 'board') {
@@ -295,7 +312,7 @@ async function mfCategory(route, body, sourcesDir) {
     });
     return {
       list: sheets.map((l) => ({
-        vod_id: 'sl:mf:' + encodeURIComponent(l.title || l.name || '') + ':' + l.id,
+        vod_id: slPrefix + encodeURIComponent(l.title || l.name || '') + ':' + l.id,
         vod_name: l.title || l.name || String(l.id),
         vod_pic: l.artwork || l.coverImg || l.cover || '',
         vod_remarks: (l.description || '歌单').slice(0, 40),
@@ -307,7 +324,7 @@ async function mfCategory(route, body, sourcesDir) {
   const boards = (groups || []).flatMap((g) => (g && g.data) || []);
   return {
     list: boards.map((b) => ({
-      vod_id: 'pl:mf:' + b.id,
+      vod_id: prefix + b.id,
       vod_name: b.title || b.name || String(b.id),
       vod_pic: b.coverImg || b.artwork || '',
       vod_remarks: (b.description || '榜单').slice(0, 40),
@@ -316,40 +333,64 @@ async function mfCategory(route, body, sourcesDir) {
   };
 }
 
-/** mf search：plugin.search(query, page, 'music') → 单曲卡片 */
+/** mf search：全部插件并行搜索（8s 限时，各取 15 首）交错混排，remarks 前缀插件名便于区分来源 */
 async function mfSearch(route, body, sourcesDir) {
   const wd = body.wd || '';
   const page = Number(body.page) || 1;
   if (!wd) return { list: [], page, pagecount: 1, total: 0, limit: 30 };
-  const runtime = getRuntime(route, sourcesDir);
-  const r = await runtime.call('search', wd, page, 'music');
-  const data = (r && r.data) || [];
-  return { list: data.map(mfSongCard), page, pagecount: r && r.isEnd ? page : 999, total: data.length, limit: 30 };
+  const plugins = await mfEnsure(route, sourcesDir);
+  const rs = await Promise.allSettled(plugins.map(async (p) => {
+    const r = await Promise.race([
+      p.runtime.call('search', wd, page, 'music'),
+      new Promise((res) => setTimeout(() => res(null), 15000)),
+    ]);
+    const data = (r && r.data) || [];
+    return data.slice(0, 15).map((s) => {
+      const c = mfSongCard(s, p.id);
+      c.vod_remarks = (s.artist || s.singer ? p.name + ' · ' + (s.artist || s.singer) : p.name);
+      return c;
+    });
+  }));
+  const lists = rs.filter((r) => r.status === 'fulfilled' && Array.isArray(r.value)).map((r) => r.value);
+  rs.forEach((r, i) => { if (r.status === 'rejected') console.log('[mf search]', plugins[i] && plugins[i].name, '失败:', r.reason && (r.reason.message || r.reason)); });
+  const merged = [];
+  for (let i = 0; merged.length < 30; i++) {
+    let added = false;
+    for (const l of lists) if (i < l.length) { merged.push(l[i]); added = true; }
+    if (!added) break;
+  }
+  return { list: merged, page, pagecount: 1, total: merged.length, limit: 30 };
 }
 
-/** mf detail：榜单/歌单/单曲均展开为播放列表（集=歌，画质位=音质在 play 层） */
+/** mf detail：榜单/歌单/单曲均展开为播放列表（集=歌，画质位=音质在 play 层）；id 带 pid 路由到对应插件 */
 async function mfDetail(route, id, sourcesDir) {
-  const runtime = getRuntime(route, sourcesDir);
-  const parts = id.split(':');
+  const plugins = await mfEnsure(route, sourcesDir);
+  let pid = '0', rest = id;
+  const m = id.match(/^(pl|sl|song):(\d+):mf:(.+)$/);
+  if (m) { pid = m[2]; rest = m[1] + ':mf:' + m[3]; }
+  else if (!/^(pl|sl|song):mf:/.test(id)) return { list: [] };
+  const plugin = plugins.find((p) => p.id === pid) || plugins[0];
+  const runtime = plugin.runtime;
+  const parts = rest.split(':');
   let name = '', pic = '', songs = [];
-  if (id.startsWith('pl:mf:')) {
+  if (rest.startsWith('pl:mf:')) {
     const r = await runtime.call('getTopListDetail', { id: parts.slice(2).join(':') });
     songs = (r && r.musicList) || [];
     name = (r && (r.title || r.name)) || '榜单';
     pic = (r && (r.coverImg || r.artwork)) || (songs[0] && (songs[0].artwork || songs[0].coverImg)) || '';
-  } else if (id.startsWith('sl:mf:')) {
+  } else if (rest.startsWith('sl:mf:')) {
     const r = await runtime.call('getMusicSheetInfo', { id: parts.slice(3).join(':') });
     songs = (r && r.musicList) || [];
     name = parts.length > 3 ? decodeURIComponent(parts[2]) : '歌单';
     pic = (songs[0] && (songs[0].artwork || songs[0].coverImg)) || '';
-  } else if (id.startsWith('song:mf:')) {
+  } else if (rest.startsWith('song:mf:')) {
     const item = JSON.parse(Buffer.from(parts.slice(2).join(':'), 'base64url').toString('utf8'));
     songs = [item];
     name = item.title || item.name || String(item.id);
     pic = item.artwork || '';
   } else return { list: [] };
   const playUrl = songs
-    .map((s) => `${s.title || s.name || s.id}${s.artist ? ' - ' + s.artist : ''}$mf://${mfEncode(s)}`)
+    .map((s) => `${s.title || s.name || s.id}${s.artist ? ' - ' + s.artist : ''}$mf://${plugin.id}/${mfEncode(s)}`)
     .join('#');
   return {
     list: [{ vod_id: id, vod_name: name, vod_pic: pic, vod_play_from: PLAY_FLAG, vod_play_url: playUrl }],
@@ -357,12 +398,21 @@ async function mfDetail(route, id, sourcesDir) {
   };
 }
 
-/** mf play：并行解析 supportedQualities 直链（画质位数组）+ getLyric 歌词 */
+/** mf play：按 pid 路由插件，并行解析 supportedQualities 直链（画质位数组）+ getLyric 歌词 */
 async function mfPlay(route, body, sourcesDir) {
   const { flag, id } = body;
-  const raw = id.startsWith('mf://') ? id.slice(5) : id.replace(/^song:mf:/, '');
+  let pid = '0', raw;
+  if (id.startsWith('mf://')) {
+    raw = id.slice(5);
+    const s = raw.indexOf('/');
+    if (s > -1) { pid = raw.slice(0, s); raw = raw.slice(s + 1); }
+  } else {
+    const m = id.match(/^song:(\d+):mf:(.+)$/);
+    if (m) { pid = m[1]; raw = m[2]; } else raw = id.replace(/^song:mf:/, '');
+  }
   const musicItem = JSON.parse(Buffer.from(raw, 'base64url').toString('utf8'));
-  const runtime = getRuntime(route, sourcesDir);
+  const plugins = await mfEnsure(route, sourcesDir);
+  const runtime = (plugins.find((p) => p.id === pid) || plugins[0]).runtime;
   const allQ = (runtime.plugin.supportedQualities || ['128k']);
   const qualities = allQ.filter((q) => !flag || flag === PLAY_FLAG || flag === (QUALITY_TITLES[q] || q));
   const results = await Promise.allSettled(qualities.map(async (q) => {
