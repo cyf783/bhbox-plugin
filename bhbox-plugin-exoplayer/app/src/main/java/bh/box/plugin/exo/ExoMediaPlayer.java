@@ -72,6 +72,8 @@ public class ExoMediaPlayer extends com.github.catvod.plugin.player.spi.Player i
     private boolean bufferApplied;
     /** 最近一次上报的视频宽度，0 表示纯音频 */
     private int mVideoWidth;
+    /** 最近一次 setDataSource 下发的原始地址（错误日志上下文用） */
+    private String mLastDataSource;
     /** 渲染器清单只打一次（用于确认 ffmpeg 扩展是否真的被反射加载） */
     private boolean renderersLogged;
 
@@ -198,6 +200,9 @@ public class ExoMediaPlayer extends com.github.catvod.plugin.player.spi.Player i
 
     @Override
     public void setDataSource(String path, Map<String, String> headers) {
+        // 记录最近一次下发的地址：onPlayerError（尤其 1004 Malformed URL）时补齐上下文，
+        // 否则该错误只有 cause 链没有 URL，无法定位是哪个源的哪条线路
+        mLastDataSource = path;
         // 开启边播缓存：DRM 内容在 helper 内自动排除；cache key（uri + 规范化 headers 后缀）
         // 与 preloadNext 预读一致，下一集预读数据由此直接命中
         mMediaSource = mMediaSourceHelper.getMediaSource(path, headers, true, errorCode);
@@ -312,6 +317,7 @@ public class ExoMediaPlayer extends com.github.catvod.plugin.player.spi.Player i
         mIsPreparing = false;
         mSpeedPlaybackParameters = null;
         mVideoWidth = 0;
+        mLastDataSource = null;
     }
 
     @Override
@@ -447,7 +453,8 @@ public class ExoMediaPlayer extends com.github.catvod.plugin.player.spi.Player i
     public void onPlayerError(PlaybackException error) {
         errorCode = error.errorCode;
         LOG.e("ExoMediaPlayer onPlayerError: " + error.errorCode
-                + " (" + error.getErrorCodeName() + ")" + getErrorChain(error));
+                + " (" + error.getErrorCodeName() + ")" + getErrorChain(error)
+                + (mLastDataSource == null ? "" : "\n  datasource=" + mLastDataSource));
         if (mEventListener != null) {
             mEventListener.onError(error.errorCode, Util.getRootCauseMessage(error));
         }

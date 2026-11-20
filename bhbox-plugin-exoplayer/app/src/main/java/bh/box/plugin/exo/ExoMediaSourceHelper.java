@@ -72,12 +72,18 @@ public final class ExoMediaSourceHelper {
     }
 
     public MediaSource getMediaSource(String uri, Map<String, String> headers, boolean isCache, int errorCode) {
+        // drm:// 写源协议（红果/番茄短剧生态）：base64(u,k,e) 载荷 → 直链 + extractor 层密钥。
+        // push_agent 推送等链路原样透传该 URL，宿主 applyDrmKodiprop 无法覆盖，插件入口兜底转译。
+        DrmPayload drmPayload = DrmPayload.parse(uri);
+        if (drmPayload != null) {
+            return getDrmPayloadSource(drmPayload, headers, isCache, errorCode);
+        }
         // KODIPROP（DRM 写源协议）解析：剥离后缀取干净 URL，无后缀时与旧版行为完全一致
         KodiProps kodi = KodiProps.parse(uri);
-        String cleanUri = kodi == null ? uri : kodi.cleanUrl;
-        Uri contentUri = Uri.parse(cleanUri);
+        String cleanUri = normalizeUri(kodi == null ? uri : kodi.cleanUrl, headers);
         // scheme 必须 equalsIgnoreCase：Uri.getScheme() 保留原始大小写（"RTSP://" 拿到的是 "RTSP"）。
         // rtspt(RTSP over TLS) 也要认 —— 它是真实存在的 scheme，只判 rtsp 会漏。
+        Uri contentUri = Uri.parse(cleanUri);
         String scheme = contentUri.getScheme();
         if ("rtmp".equalsIgnoreCase(scheme)) {
             return new ProgressiveMediaSource.Factory(new RtmpDataSource.Factory())
@@ -134,6 +140,41 @@ public final class ExoMediaSourceHelper {
                                         new ByteVc2ExtractorsFactory());
                 return applyDrm(progressiveFactory, drmPlan).createMediaSource(mediaItem);
         }
+    }
+
+    /**
+     * drm:// 载荷播放源：载荷自带直链与密钥，headers 优先级为「播放 headers > 载荷 h > 默认 UA」。
+     * 密钥经 extractor 层 {@code setMp4ClearKeys} 软件解密（不建 MediaDrm 会话）；
+     * 无密钥时按明文直链播放。加密内容不进边播缓存（与 KODIPROP DRM 语义一致）。
+     */
+    private MediaSource getDrmPayloadSource(DrmPayload payload, Map<String, String> headers,
+                                            boolean isCache, int errorCode) {
+        Map<String, String> merged = new HashMap<>(payload.headers);
+        if (headers != null) {
+            merged.putAll(toRequestHeaders(headers));
+        }
+        // 红果 CDN 校验 UA：载荷与播放 headers 都未提供时补 App UA
+        boolean hasUa = false;
+        for (Map.Entry<String, String> entry : merged.entrySet()) {
+            if (com.google.common.net.HttpHeaders.USER_AGENT.equalsIgnoreCase(entry.getKey())) hasUa = true;
+        }
+        if (!hasUa) {
+            merged.put(com.google.common.net.HttpHeaders.USER_AGENT, DrmPayload.DEFAULT_UA);
+        }
+        Map<String, String> requestHeaders = toRequestHeaders(merged);
+        String cleanUri = normalizeUri(payload.url, requestHeaders);
+        Uri contentUri = Uri.parse(cleanUri);
+        DataSource.Factory factory = createDataSourceFactory(requestHeaders);
+        // 加密内容不进边播缓存：无密钥（明文直链）才允许
+        if (isCache && payload.mp4ClearKeys == null) {
+            factory = getCacheDataSourceFactory(factory, requestHeaders);
+        }
+        ProgressiveMediaSource.Factory progressiveFactory =
+                payload.mp4ClearKeys != null
+                        ? new ProgressiveMediaSource.Factory(factory,
+                                getExtractorsFactory().setMp4ClearKeys(payload.mp4ClearKeys))
+                        : new ProgressiveMediaSource.Factory(factory, new ByteVc2ExtractorsFactory());
+        return progressiveFactory.createMediaSource(MediaItem.fromUri(contentUri));
     }
 
     /** DRM 模式下把会话管理提供者挂到 MediaSource 工厂上 */
@@ -297,6 +338,81 @@ public final class ExoMediaSourceHelper {
             this.mp4ClearKeys = mp4ClearKeys;
         }
     }
+
+    /**
+     * URL 规范化：源生态常见脏写法兜底，防止 OkHttp 侧抛 "Malformed URL"（1004）这种无上下文错误。
+     * <p>
+     * 实测 okhttp HttpUrl.parse 对空格/全角冒号/大写 scheme 都宽容，实际会导致 Malformed 的形态：
+     * 缺 scheme（"example.com/x.mp4"、"//cdn/x.mp4"）、非 http(s) 之外的任意自定义 scheme
+     * （file:/thunder:/magnet:/tvbox-torrent:/ftp:/ed2k: 等）、端口 &gt; 65535、host 含非法字符。
+     * 盘符路径与缺 scheme 两种可直接修复（补 file:// / 推断协议），其余只记日志定位不改语义。
+     *
+     * @param uri     KODIPROP 剥离后的播放地址
+     * @param headers 播放 headers（缺 scheme 补协议时仅在显式 UA/Referer 下推断 https）
+     * @return 规范化后的 URL 字符串
+     */
+    private static String normalizeUri(String uri, Map<String, String> headers) {
+        if (TextUtils.isEmpty(uri)) {
+            return uri;
+        }
+        String url = uri.trim();
+        if (url.isEmpty()) {
+            return url;
+        }
+        // 1) Windows 本地盘符路径（宿主本地文件直链场景）：file:// + 正斜杠
+        //    兜底在前：盘符冒号若先被当 scheme 处理会污染后续判断（"C:" 本身就是合法 scheme 语法）
+        if (url.length() >= 2 && Character.isLetter(url.charAt(0)) && url.charAt(1) == ':') {
+            LOG.e(TAG_NORMALIZE, "盘符路径自动按本地文件播放: " + url);
+            return "file:///" + url.replace('\\', '/');
+        }
+        // 2) 缺 scheme："//host/path" 或裸域名 → 按 headers 推断 https/http（guessScheme）
+        if (url.startsWith("//")) {
+            String guess = guessScheme(headers);
+            LOG.e(TAG_NORMALIZE, "缺 scheme（//开头）按 " + guess + " 补全: " + url);
+            return guess + ":" + url;
+        }
+        String scheme = Uri.parse(url).getScheme();
+        if (TextUtils.isEmpty(scheme)) {
+            if (url.contains("://")) {
+                // 有 :// 但 scheme 解析为空 → scheme 字符非法（含空格/全角字符等）
+                LOG.e(TAG_NORMALIZE, "scheme 字符非法，URL 无法被任何内核解析: " + url);
+            } else {
+                String guess = guessScheme(headers);
+                LOG.e(TAG_NORMALIZE, "缺 scheme（裸域名）按 " + guess + " 补全: " + url);
+                return guess + "://" + url;
+            }
+            return url;
+        }
+        // 3) 非 http(s)/rtmp/rtsp/rtspt scheme 流进 progressive 管道时 OkHttp 必抛 Malformed：
+        //    这里提前给出带 scheme 的可读日志（file/asset/content/data 由 media3 内核数据源处理，
+        //    其余 scheme 说明是源/插件路由问题，需要结合源侧排查）
+        String low = scheme.toLowerCase();
+        boolean known = low.equals("http") || low.equals("https") || low.equals("rtmp")
+                || low.equals("rtsp") || low.equals("rtspt") || low.equals("file")
+                || low.equals("asset") || low.equals("content") || low.equals("data")
+                || low.equals("rawresource") || low.equals("android.resource")
+                || low.equals("smb") || low.equals("udp");
+        if (!known) {
+            LOG.e(TAG_NORMALIZE, "非网络协议 scheme=" + scheme + " 将无法被 OkHttp 数据源打开"
+                    + "（Malformed URL 高发形态，检查源返回的直链是否错误）: " + url);
+        }
+        return url;
+    }
+
+    /** 缺 scheme 补全时的协议推断：headers 显式带 UA/Referer 视为网络源 → https，否则保守 http */
+    private static String guessScheme(Map<String, String> headers) {
+        if (headers != null) {
+            for (Map.Entry<String, String> entry : headers.entrySet()) {
+                String key = entry.getKey();
+                if (key != null && ("User-Agent".equalsIgnoreCase(key) || "Referer".equalsIgnoreCase(key))) {
+                    return "https";
+                }
+            }
+        }
+        return "http";
+    }
+
+    private static final String TAG_NORMALIZE = "ExoMediaSourceHelper";
 
     private static synchronized DefaultExtractorsFactory getExtractorsFactory() {
         // 注意：libs/ 这套 aar（media3 1.11.0 基线）的 DefaultTsPayloadReaderFactory 只有
@@ -519,8 +635,13 @@ public final class ExoMediaSourceHelper {
             if (uri == null || uri.length() == 0 || bytes <= 0) return 0;
             Uri contentUri = Uri.parse(uri);
             String scheme = contentUri.getScheme();
-            // 仅预读 http(s) 直链；本地代理/文件等地址起播本就无网络首缓冲
-            if (scheme == null || !("http".equalsIgnoreCase(scheme) || "https".equalsIgnoreCase(scheme))) return 0;
+            // 仅预读 http(s) 直链；本地代理/文件等地址起播本就无网络首缓冲。
+            // 非 http(s) 的 scheme 单独记日志：MusicKernelAdapter 等旁路把任意地址交给 SPI 时，
+            // 这里是发现"URL 根本不是网络直链"的唯一观察点
+            if (scheme == null || !("http".equalsIgnoreCase(scheme) || "https".equalsIgnoreCase(scheme))) {
+                LOG.i("bh-preload skip scheme=" + (scheme == null ? "null" : scheme) + " url=" + uri);
+                return 0;
+            }
             sPreloadCancelled = false;
             Map<String, String> requestHeaders = toRequestHeaders(headers);
             // 按路径判断 HLS（query 中的 .m3u8 字样不代表内容是 playlist）
