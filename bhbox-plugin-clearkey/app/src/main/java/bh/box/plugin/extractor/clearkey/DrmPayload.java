@@ -14,26 +14,27 @@ import java.util.Iterator;
 import java.util.Map;
 
 /**
- * drm:// 写源协议载荷解析（红果/番茄短剧生态，字段语义对齐 drpy 红果果[短].js）。
+ * drm:// 写源协议载荷解析（红果/番茄短剧 + FongMi 原生 DRM JSON 生态）。
  * <p>
- * URL 形态（三选一）：
+ * URL 形态（四选一）：
  * <pre>
- * drm://eyJ1Ijoi... base64(JSON)             —— 现网主流（push_agent 推送链路原样透传）
- * drm://json?d=&lt;URL编码的 JSON&gt;             —— 方案文档约定的查询参数式
- * drm://{"u":"...","k":"..."}                —— 裸 JSON（罕见，容忍）
+ * drm://eyJ1Ijoi... base64(JSON)                  —— 现网主流（push_agent 推送链路原样透传）
+ * drm://json?d=&lt;URL编码的 JSON&gt;                   —— 方案文档约定的查询参数式
+ * drm://widevine?u=&amp;lic=&amp;h=                      —— 方案文档约定的 License Server 查询式
+ * drm://{"url":"...","drm":{...}}                 —— 裸 JSON（罕见，容忍）
  * </pre>
- * 载荷 JSON 字段：
+ * 载荷 JSON 有两大家族（字段并存时 FongMi 式优先）：
  * <ul>
- *   <li>{@code u}：视频直链（必填，http/https，unfragmented CENC MP4 为主）；</li>
- *   <li>{@code k}：内容密钥，三形态——32 位 hex（单密钥，kid 未知）、base64url 16 字节
- *       （单密钥）、{@code {"keys":[{"kid":..,"k":..}]}} JSON（多密钥）；缺省按明文播放；</li>
- *   <li>{@code e}：预留（当前恒为 0，忽略）；</li>
- *   <li>{@code h}：可选 headers JSON（覆盖默认 UA/Referer）。</li>
+ *   <li><b>简式</b>（红果果[短].js）：{@code u}=视频直链、{@code k}=密钥（32 位 hex /
+ *       base64url 16 字节 / keys JSON）、{@code h}=可选 headers、{@code e}=预留（忽略）；</li>
+ *   <li><b>FongMi 原生式</b>（Result.drm 全量打包）：{@code url}=视频/manifest 直链、
+ *       {@code drm}={@code {type, key, header, forceKey}}——type 映射 scheme，key 三形态：
+ *       keys JSON（ClearKey 静态密钥）、http URL（License Server）、b64:/裸 base64（PSSH）。</li>
  * </ul>
  * <p>
  * 与 EXO 插件 bh.box.plugin.exo.DrmPayload 同源实现（插件 APK 隔离加载，互不冲突）。
- * 本插件把载荷转译为 KODIPROP URL：unfragmented 容器走本地解密代理（全内核可播），
- * fMP4 原样返回交 EXO 原生 ClearKey session（EXO 插件入口同样识别 drm:// 原始形态）。
+ * 本插件只接管 ClearKey 静态密钥形态（canPlay 语义）：unfragmented 容器走本地解密代理
+ * （全内核可播），fMP4 原样返回交 EXO 原生处理；License/PSSH/明文形态不拦截。
  */
 final class DrmPayload {
 
@@ -46,17 +47,38 @@ final class DrmPayload {
     /** 载荷默认 Referer：红果视频 CDN 的已验证 Referer（红果果[短].js remoteRange 同款） */
     static final String DEFAULT_REFERER = "https://novel.snssdk.com/";
 
+    /** 处置模式：clearkey 静态密钥（本插件接管）/ license 或 pssh（委托 EXO）/ 明文 */
+    static final int MODE_CLEARKEY = 1;
+    static final int MODE_KODIPROP = 2;
+    static final int MODE_PLAIN = 3;
+
     /** 视频直链（必填） */
     final String url;
-    /** kid(hex 小写) → 16 字节密钥；载荷无 k 时为 null（按明文播放） */
+    /** 处置模式（MODE_*） */
+    final int mode;
+    /** license_type（KODIPROP 委托时使用） */
+    final String licenseType;
+    /** license_key 原文（KODIPROP 委托时使用） */
+    final String licenseKey;
+    /** pssh 数据（FongMi drm.pssh 显式提供时非空） */
+    final byte[] pssh;
+    /** kid(hex 小写) → 16 字节密钥；MODE_CLEARKEY 时非空 */
     final Map<String, byte[]> keys;
     /** 载荷自带 headers（UA/Referer 等），空表表示用默认 */
     final Map<String, String> headers;
+    /** 原始载荷（日志用） */
+    final String raw;
 
-    private DrmPayload(String url, Map<String, byte[]> keys, Map<String, String> headers) {
+    private DrmPayload(String url, int mode, String licenseType, String licenseKey,
+                       byte[] pssh, Map<String, byte[]> keys, Map<String, String> headers, String raw) {
         this.url = url;
+        this.mode = mode;
+        this.licenseType = licenseType;
+        this.licenseKey = licenseKey;
+        this.pssh = pssh;
         this.keys = keys;
         this.headers = headers;
+        this.raw = raw;
     }
 
     /**
@@ -73,39 +95,141 @@ final class DrmPayload {
             LOG.e(TAG, "drm:// 后无载荷: " + url);
             return null;
         }
+        // 形态四：drm://<type>?u=..&lic=..&h=.. 查询参数式
+        DrmPayload query = parseQueryForm(body);
+        if (query != null) {
+            return query;
+        }
         String json = extractJson(body);
         if (TextUtils.isEmpty(json)) {
             return null;
         }
         try {
             JSONObject obj = new JSONObject(json);
-            String u = obj.optString("u", "").trim();
-            if (TextUtils.isEmpty(u) || !(u.startsWith("http://") || u.startsWith("https://"))) {
-                LOG.e(TAG, "载荷缺有效 u 直链，忽略: " + json);
+            String mediaUrl = firstNonEmpty(obj.optString("url", ""), obj.optString("u", "")).trim();
+            if (TextUtils.isEmpty(mediaUrl) || !(mediaUrl.startsWith("http://") || mediaUrl.startsWith("https://"))) {
+                LOG.e(TAG, "载荷缺有效 url/u 直链，忽略: " + json);
                 return null;
             }
-            // e 为预留字段（加密模式标记），当前生态恒为 0；非 0 仅记日志不改行为
+            Map<String, String> headers = parseHeaders(firstNonEmpty(obj.optString("h", ""), obj.optString("header", "")));
             int e = obj.optInt("e", 0);
             if (e != 0) {
                 LOG.i(TAG + " 载荷 e=" + e + "（非 0，预留字段，暂不区分处理）");
             }
-            Map<String, String> headers = parseHeaders(obj.optString("h", ""));
-            Map<String, byte[]> keys = parseKey(obj.optString("k", "").trim());
-            if (keys == null && !TextUtils.isEmpty(obj.optString("k", ""))) {
-                LOG.e(TAG, "载荷 k 密钥无法解析（hex/base64url/keys JSON 均不匹配），按明文处理");
+            JSONObject drmObj = obj.optJSONObject("drm");
+            DrmPayload payload;
+            if (drmObj != null) {
+                payload = buildFromFongMi(mediaUrl, drmObj, headers, json);
+            } else {
+                payload = buildFromSimple(mediaUrl, obj.optString("k", "").trim(), headers, json);
             }
-            LOG.i(TAG + " drm:// 载荷解析成功 u=" + u + " keys=" + (keys == null ? 0 : keys.size()));
-            return new DrmPayload(u, keys, headers);
+            if (payload != null) {
+                LOG.i(TAG + " drm:// 载荷解析成功 mode=" + payload.mode + " u=" + payload.url
+                        + (payload.keys != null ? " keys=" + payload.keys.size() : ""));
+            }
+            return payload;
         } catch (Exception e) {
             LOG.e(TAG, "载荷 JSON 解析失败: " + e.getMessage());
             return null;
         }
     }
 
+    /** 查询参数式：drm://widevine?u=&lic=&h= */
+    private static DrmPayload parseQueryForm(String body) {
+        int q = body.indexOf('?');
+        if (q < 0) {
+            return null;
+        }
+        String head = body.substring(0, q).trim();
+        if (head.isEmpty() || "json".equalsIgnoreCase(head)) {
+            return null;
+        }
+        Map<String, String> params = parseQuery(body.substring(q + 1));
+        if (params.isEmpty()) {
+            return null;
+        }
+        String u = params.get("u");
+        if (TextUtils.isEmpty(u) || !(u.startsWith("http://") || u.startsWith("https://"))) {
+            LOG.e(TAG, "drm://" + head + "? 形态缺有效 u 参数");
+            return null;
+        }
+        String lic = params.get("lic");
+        String type = mapSchemeType(head);
+        if (type == null) {
+            LOG.e(TAG, "drm://" + head + "? 未识别的 scheme，忽略");
+            return null;
+        }
+        Map<String, String> headers = parseHeaders(params.get("h"));
+        if (!TextUtils.isEmpty(lic) && (lic.startsWith("http://") || lic.startsWith("https://"))) {
+            return new DrmPayload(u, MODE_KODIPROP, type, lic, null, null, headers, body);
+        }
+        Map<String, byte[]> keys = parseKey(lic);
+        if (keys != null) {
+            return new DrmPayload(u, MODE_CLEARKEY, "clearkey", lic, null, keys, headers, body);
+        }
+        if ("com.widevine.alpha".equals(type)) {
+            return new DrmPayload(u, MODE_KODIPROP, type, null, null, null, headers, body);
+        }
+        LOG.i(TAG + " drm://" + head + "? 载荷无有效密钥，按明文处理");
+        return new DrmPayload(u, MODE_PLAIN, type, null, null, null, headers, body);
+    }
+
+    /** FongMi 原生 drm 对象 → 分流构建 */
+    private static DrmPayload buildFromFongMi(String mediaUrl, JSONObject drmObj,
+                                              Map<String, String> headers, String raw) {
+        String type = mapSchemeType(drmObj.optString("type", "").trim());
+        String key = drmObj.optString("key", "").trim();
+        byte[] pssh = parsePssh(drmObj.optString("pssh", ""));
+        if (type == null || (TextUtils.isEmpty(key) && pssh == null)) {
+            LOG.i(TAG + " drm 对象 type 缺失或无 key/pssh，按明文处理");
+            return new DrmPayload(mediaUrl, MODE_PLAIN, null, null, pssh, null, headers, raw);
+        }
+        if (key.startsWith("http://") || key.startsWith("https://")) {
+            return new DrmPayload(mediaUrl, MODE_KODIPROP, type, key, pssh, null, headers, raw);
+        }
+        Map<String, byte[]> keys = parseKey(key);
+        if (keys != null) {
+            return new DrmPayload(mediaUrl, MODE_CLEARKEY, type, key, pssh, keys, headers, raw);
+        }
+        if (key.startsWith("b64:") || looksLikeBase64(key)) {
+            byte[] psshData = key.startsWith("b64:") ? parsePssh(key.substring(4)) : parsePssh(key);
+            if (psshData != null) {
+                return new DrmPayload(mediaUrl, MODE_KODIPROP, type, key, psshData, null, headers, raw);
+            }
+        }
+        LOG.e(TAG, "drm.key 形态无法识别，按明文处理: " + abbreviate(key));
+        return new DrmPayload(mediaUrl, MODE_PLAIN, type, key, pssh, null, headers, raw);
+    }
+
+    /** 简式 k 密钥 → 分流构建 */
+    private static DrmPayload buildFromSimple(String mediaUrl, String k,
+                                              Map<String, String> headers, String raw) {
+        Map<String, byte[]> keys = parseKey(k);
+        if (keys != null) {
+            return new DrmPayload(mediaUrl, MODE_CLEARKEY, "clearkey", k, null, keys, headers, raw);
+        }
+        if (!TextUtils.isEmpty(k)) {
+            LOG.e(TAG, "载荷 k 密钥无法解析（hex/base64url/keys JSON 均不匹配），按明文处理");
+        }
+        return new DrmPayload(mediaUrl, MODE_PLAIN, "clearkey", null, null, null, headers, raw);
+    }
+
+    /** scheme 短名/全名 → KODIPROP license_type 规范值；未识别返回 null */
+    private static String mapSchemeType(String type) {
+        if (TextUtils.isEmpty(type)) {
+            return null;
+        }
+        String low = type.toLowerCase();
+        if (low.contains("clearkey")) return "clearkey";
+        if (low.contains("widevine")) return "com.widevine.alpha";
+        if (low.contains("playready")) return "com.microsoft.playready";
+        return null;
+    }
+
     /**
-     * 转译为 KODIPROP URL（与宿主 applyDrmKodiprop / EXO KodiProps 语义兼容）：
-     * u 作 cleanUrl；单密钥以全零 kid + keys JSON 内联（解密器对单密钥放宽为直接使用）；
-     * headers 以 stream_headers 承载（载荷 h > 默认 UA/Referer）。
+     * 转译为 KODIPROP URL（仅 clearkey 静态密钥形态，与宿主 applyDrmKodiprop / EXO KodiProps
+     * 语义兼容）：url 作 cleanUrl；单密钥以全零 kid + keys JSON 内联（解密器对单密钥放宽为
+     * 直接使用）；headers 以 stream_headers 承载。
      */
     String toKodipropUrl() {
         StringBuilder sb = new StringBuilder(url);
@@ -133,7 +257,7 @@ final class DrmPayload {
         return merged;
     }
 
-    /** keys 表 → 内联 keys JSON（kid=全零 hex 转 b64url；k=b64url） */
+    /** keys 表 → 内联 keys JSON（kid hex → b64url；k=b64url） */
     private String buildKeysJson() {
         StringBuilder sb = new StringBuilder("{\"keys\":[");
         boolean first = true;
@@ -151,29 +275,37 @@ final class DrmPayload {
 
     /** 从 body 提取载荷 JSON 字符串：裸 JSON / base64 / json?d= 三形态 */
     private static String extractJson(String body) {
-        // 形态 3：裸 JSON
         if (body.startsWith("{")) {
             return body;
         }
-        // 形态 2：drm://json?d=<URL编码 JSON>（方案文档约定）
         int q = body.indexOf('?');
         String head = q < 0 ? body : body.substring(0, q);
         if ("json".equalsIgnoreCase(head) && q >= 0) {
             String query = body.substring(q + 1);
-            // 取 d 参数（不严格 parse query，载荷内不该再出现 &）
             if (query.startsWith("d=")) {
                 return decodeComponent(query.substring(2));
             }
             LOG.e(TAG, "drm://json 形态缺 d 参数: " + body);
             return null;
         }
-        // 形态 1：base64（现网主流）
         byte[] decoded = tryBase64(body);
         if (decoded == null) {
             LOG.e(TAG, "drm:// 载荷既非 JSON 也非 base64: " + body);
             return null;
         }
         return new String(decoded);
+    }
+
+    /** a=1&b=2 查询串解析（URL decode） */
+    private static Map<String, String> parseQuery(String query) {
+        Map<String, String> out = new HashMap<>();
+        for (String pair : query.split("&")) {
+            int eq = pair.indexOf('=');
+            if (eq <= 0) continue;
+            out.put(decodeComponent(pair.substring(0, eq)).trim(),
+                    decodeComponent(pair.substring(eq + 1)).trim());
+        }
+        return out;
     }
 
     /** base64 解码：先标准，失败再 URL-safe 无填充 */
@@ -197,26 +329,62 @@ final class DrmPayload {
         }
     }
 
-    /** 载荷 h 字段（headers JSON）→ 键值表；空/失败返回空表 */
+    private static String firstNonEmpty(String a, String b) {
+        return !TextUtils.isEmpty(a) ? a : (b == null ? "" : b);
+    }
+
+    private static String abbreviate(String value) {
+        if (value == null || value.length() <= 60) return value;
+        return value.substring(0, 60) + "…(" + value.length() + ")";
+    }
+
+    /** 载荷 headers 字段（headers JSON）→ 键值表；空/失败返回空表 */
     private static Map<String, String> parseHeaders(String json) {
         Map<String, String> out = new HashMap<>();
         if (TextUtils.isEmpty(json)) {
             return out;
         }
-        try {
-            JSONObject obj = new JSONObject(json.replace('\'', '"'));
-            Iterator<String> it = obj.keys();
-            while (it.hasNext()) {
-                String key = it.next();
-                String value = obj.optString(key, null);
-                if (!TextUtils.isEmpty(key) && !TextUtils.isEmpty(value)) {
-                    out.put(key.trim(), value.trim());
+        String body = json.trim();
+        if (body.startsWith("{")) {
+            try {
+                JSONObject obj = new JSONObject(body.replace('\'', '"'));
+                Iterator<String> it = obj.keys();
+                while (it.hasNext()) {
+                    String key = it.next();
+                    String value = obj.optString(key, null);
+                    if (!TextUtils.isEmpty(key) && !TextUtils.isEmpty(value)) {
+                        out.put(key.trim(), value.trim());
+                    }
                 }
+            } catch (Exception e) {
+                LOG.e(TAG, "载荷 headers 解析失败，忽略: " + abbreviate(json));
             }
-        } catch (Exception e) {
-            LOG.e(TAG, "载荷 h headers 解析失败，忽略: " + json);
         }
         return out;
+    }
+
+    /** PSSH base64 解析：b64: 前缀剥离 + 标准/URL-safe 容忍；失败返回 null */
+    private static byte[] parsePssh(String value) {
+        if (TextUtils.isEmpty(value)) {
+            return null;
+        }
+        String data = value.startsWith("b64:") ? value.substring(4) : value;
+        if (data.startsWith("http://") || data.startsWith("https://")) {
+            return null;
+        }
+        byte[] decoded = tryBase64(data);
+        if (decoded == null || decoded.length < 32) {
+            return null;
+        }
+        return decoded;
+    }
+
+    /** 裸 base64 识别（对齐 KodipropParser 宽容规则）：字符集受限、4 的倍数、≥16 */
+    private static boolean looksLikeBase64(String value) {
+        if (value.length() < 16 || value.length() % 4 != 0) {
+            return false;
+        }
+        return value.matches("[A-Za-z0-9+/]+={0,2}");
     }
 
     /**
@@ -228,11 +396,9 @@ final class DrmPayload {
         if (TextUtils.isEmpty(k)) {
             return null;
         }
-        // 形态 3：keys JSON
         if (k.startsWith("{")) {
             return parseKeysJson(k);
         }
-        // 形态 1：32 位 hex
         if (isHex16(k)) {
             byte[] key = hexToBytes(k);
             if (key != null) {
@@ -241,7 +407,6 @@ final class DrmPayload {
                 return out;
             }
         }
-        // 形态 2：base64url 16 字节
         byte[] decoded = tryBase64(k);
         if (decoded != null && decoded.length == 16) {
             Map<String, byte[]> out = new HashMap<>();

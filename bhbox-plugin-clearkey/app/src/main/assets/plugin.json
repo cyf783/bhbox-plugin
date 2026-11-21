@@ -5,8 +5,8 @@
   "type": "extractor",
   "mainClass": "bh.box.plugin.extractor.clearkey.ClearKeyExtractorPlugin",
   "downloadUrl": "https://h-box-release.netlify.app/release/plugins/clearkey.apk",
-  "version": 101,
-  "versionName": "1.0.1",
+  "version": 102,
+  "versionName": "1.0.2",
   "minSdk": 23,
   "minAppVersion": 401,
   "params": []

@@ -70,11 +70,11 @@ public class ClearKeyExtractorPlugin implements IExtractorPlugin {
     @Override
     public boolean canPlay(String url) {
         if (TextUtils.isEmpty(url)) return false;
-        // drm:// 写源协议（红果/番茄短剧载荷）：仅当载荷带有效密钥时接管
-        // （无密钥=明文直链，不拦截，原样透传任意内核）
+        // drm:// 写源协议（红果/番茄短剧简式 + FongMi DRM JSON 式）：仅当解析出 ClearKey
+        // 静态密钥时接管；License/PSSH/明文形态不拦截（License 走 EXO 原生 MediaDrm）
         if (url.startsWith(DrmPayload.SCHEME)) {
             DrmPayload payload = DrmPayload.parse(url);
-            return payload != null && payload.keys != null;
+            return payload != null && payload.mode == DrmPayload.MODE_CLEARKEY;
         }
         if (!url.contains(KodipropParser.PROP_MARKER)) return false;
         KodipropParser parsed = KodipropParser.parse(url);
@@ -98,12 +98,18 @@ public class ClearKeyExtractorPlugin implements IExtractorPlugin {
 
     @Override
     public String getUrl(String url) throws AppException {
-        // drm:// 载荷：解析后转译为 KODIPROP URL 再走统一拦截链路
-        // （unfragmented → 本地解密代理；fMP4 → 原样返回，EXO 原生处理）
+        // drm:// 载荷：仅 ClearKey 静态密钥形态转译为 KODIPROP URL 走统一拦截链路
+        // （unfragmented → 本地解密代理；fMP4 → 原样返回，EXO 原生处理）。
+        // License/PSSH/明文形态不拦截：License 交 EXO 原生 MediaDrm（EXO 1.2.8 入口同样识别
+        // drm:// 并委托 KODIPROP 链路），明文透传任意内核。
         if (url != null && url.startsWith(DrmPayload.SCHEME)) {
             DrmPayload payload = DrmPayload.parse(url);
             if (payload == null) return url;
-            if (payload.keys == null) {
+            if (payload.mode == DrmPayload.MODE_KODIPROP) {
+                LOG.i(TAG, "drm:// License/PSSH 形态不拦截，透传 EXO 原生处理: " + payload.url);
+                return payload.toKodipropUrl();
+            }
+            if (payload.mode == DrmPayload.MODE_PLAIN) {
                 LOG.i(TAG, "drm:// 载荷无密钥，按明文直链透传: " + payload.url);
                 return payload.url;
             }

@@ -10,8 +10,8 @@ android {
         applicationId "bh.box.plugin.extractor.clearkey"
         minSdk 23
         targetSdk rootProject.ext.targetSdk
-        versionCode 101
-        versionName "1.0.1"
+        versionCode 102
+        versionName "1.0.2"
     }
 
     buildTypes {

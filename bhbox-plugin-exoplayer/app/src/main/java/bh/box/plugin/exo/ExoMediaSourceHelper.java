@@ -72,11 +72,17 @@ public final class ExoMediaSourceHelper {
     }
 
     public MediaSource getMediaSource(String uri, Map<String, String> headers, boolean isCache, int errorCode) {
-        // drm:// 写源协议（红果/番茄短剧生态）：base64(u,k,e) 载荷 → 直链 + extractor 层密钥。
+        // drm:// 写源协议（红果/番茄短剧 + FongMi DRM JSON）：载荷 → 直链 + 密钥/License 分流。
         // push_agent 推送等链路原样透传该 URL，宿主 applyDrmKodiprop 无法覆盖，插件入口兜底转译。
         DrmPayload drmPayload = DrmPayload.parse(uri);
         if (drmPayload != null) {
-            return getDrmPayloadSource(drmPayload, headers, isCache, errorCode);
+            // License/PSSH 模式转译为 KODIPROP URL 后走既有 DrmPlan 链路（复用已验证的
+            // BhDrmSessionManagerProvider / Dash/Hls 工厂），不在此处重复实现
+            if (drmPayload.mode == DrmPayload.MODE_KODIPROP) {
+                uri = drmPayload.toKodipropUrl();
+            } else {
+                return getDrmPayloadSource(drmPayload, headers, isCache, errorCode);
+            }
         }
         // KODIPROP（DRM 写源协议）解析：剥离后缀取干净 URL，无后缀时与旧版行为完全一致
         KodiProps kodi = KodiProps.parse(uri);
@@ -143,7 +149,8 @@ public final class ExoMediaSourceHelper {
     }
 
     /**
-     * drm:// 载荷播放源：载荷自带直链与密钥，headers 优先级为「播放 headers > 载荷 h > 默认 UA」。
+     * drm:// 载荷播放源（MODE_CLEARKEY / MODE_PLAIN）：载荷自带直链与密钥，
+     * headers 优先级为「播放 headers > 载荷 h > 默认 UA」。
      * 密钥经 extractor 层 {@code setMp4ClearKeys} 软件解密（不建 MediaDrm 会话）；
      * 无密钥时按明文直链播放。加密内容不进边播缓存（与 KODIPROP DRM 语义一致）。
      */
