@@ -45,5 +45,9 @@ loadUmd(jinjaCode, 'jinja');
 loadUmd(json5Code, 'JSON5');
 loadUmd(nodeRsaCode, 'NODERSA');
 loadUmd(gb18030Code, 'gbkTool');
-loadUmd(jsonPathCode, 'JSONPath');
+// jsonpathplus 必须走 loadScript（global 分支）：上游 ESM 直引 UMD 时挂的是
+// {JSONPath, SafeScript} 对象（globalThis.JSONPath.JSONPath 为方法），htmlParser
+// 以 JSONPath.JSONPath({...}) 调用；loadUmd 的 CJS 分支会把裸函数挂上去，导致
+// 「JSONPath.JSONPath is not a function」（存量 bug，jsonpath 系源全挂）
+loadScript(jsonPathCode);
 loadScript(randomUaCode);            // globalThis.randomUa

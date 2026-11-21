@@ -4,6 +4,8 @@ import Module, {createRequire} from 'module';
 import axios from 'axios';
 // 精简：sync-fetch 已裁剪（远程模块同步 require 不支持，stub 仅在调用时抛错）
 import fetchSync from '../stubs/sync-fetch.js';
+import {XMLHttpRequest} from 'xmlhttprequest';
+import {HttpsProxyAgent} from 'https-proxy-agent';
 
 // bundle 后 import.meta.url 不再指向真实引擎目录，统一以 DS_HOME（启动参数传入的源根目录）为基准：
 //  - 裸包：<DS_HOME>/node_modules（assets/npm 部署处）
@@ -29,6 +31,10 @@ Module.prototype.require = function(id) {
     if (id === 'cheerio' && globalThis.cheerio) return globalThis.cheerio;
     if (id === 'qs' && globalThis.qs) return globalThis.qs;
     if (id === 'crypto-js' && globalThis.CryptoJS) return globalThis.CryptoJS;
+    // 已静态打进 bundle 的包：bundle 版微型 node_modules 不含它们，磁盘 require
+    // 会落空（树版有 node_modules）→ 在 require 层兜底同形模块
+    if (id === 'xmlhttprequest') return {XMLHttpRequest};
+    if (id === 'https-proxy-agent') return {HttpsProxyAgent};
     return originalRequire.apply(this, arguments);
 };
 
@@ -42,6 +48,9 @@ export const rootRequire = (modulePath) => {
     if (modulePath === 'crypto-js') return globalThis.CryptoJS;
     if (modulePath === 'fs' && globalThis.fs) return globalThis.fs;
     if (modulePath === 'path' && globalThis.path) return globalThis.path;
+    // 已静态打进 bundle 的包（bundle 版 node_modules 不含，见上方 patch 注释）
+    if (modulePath === 'xmlhttprequest') return {XMLHttpRequest};
+    if (modulePath === 'https-proxy-agent') return {HttpsProxyAgent};
 
     if (modulePath.startsWith('./') || modulePath.startsWith('../')) {
         const absolutePath = path.resolve(LIB_ROOT, modulePath);

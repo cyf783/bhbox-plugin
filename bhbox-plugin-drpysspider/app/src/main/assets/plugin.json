@@ -1,13 +1,13 @@
 {
   "id": "bh.box.plugin.drpysspider",
   "name": "drpyS Spider 插件",
-  "description": "支持 drpyS (drpy-node) 转T3源。站点key必须以[ds_]开头",
+  "description": "支持 drpyS (drpy-node) 转T3源。站点key必须以[ds_]开头；引擎基于 drpy-node v2.0.7",
   "type": "spider",
   "spider": "ds",
   "mainClass": "bh.box.plugin.drpysspider.DrpysSpiderPlugin",
   "downloadUrl": "https://h-box-release.netlify.app/release/plugins/drpysspider.apk",
-  "version": 101,
-  "versionName": "1.0.1",
+  "version": 102,
+  "versionName": "1.0.2",
   "minSdk": 23,
   "minAppVersion": 383,
   "depends": ["bh.box.plugin.node"]

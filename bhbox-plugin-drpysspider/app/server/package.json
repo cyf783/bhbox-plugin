@@ -23,7 +23,9 @@
     "pinyin": "^4.0.0",
     "qs": "^6.13.1",
     "tunnel": "^0.0.6",
+    "undici": "^6.21.1",
     "ws": "^8.18.0",
+    "https-proxy-agent": "^7.0.6",
     "xmlhttprequest": "^1.8.0"
   },
   "devDependencies": {
