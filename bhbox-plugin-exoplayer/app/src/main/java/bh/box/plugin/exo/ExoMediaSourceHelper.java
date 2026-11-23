@@ -16,6 +16,7 @@ import androidx.media3.database.StandaloneDatabaseProvider;
 import androidx.media3.datasource.DataSpec;
 import androidx.media3.datasource.DataSource;
 import androidx.media3.datasource.DefaultDataSource;
+import androidx.media3.datasource.TransferListener;
 import androidx.media3.datasource.cache.Cache;
 import androidx.media3.datasource.cache.CacheDataSource;
 import androidx.media3.datasource.cache.LeastRecentlyUsedCacheEvictor;
@@ -38,7 +39,10 @@ import com.github.catvod.utils.LOG;
 import com.github.catvod.utils.Path;
 import com.google.common.net.HttpHeaders;
 
+import java.io.IOException;
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
 import java.util.UUID;
@@ -553,7 +557,10 @@ public final class ExoMediaSourceHelper {
      * media3 默认 key 只认 uri，同一 URL 配不同 Referer/UA/token 的线路会互相读到对方写盘的数据。
      * 无 headers 时保持 media3 默认行为（key=uri），不改变原有命中语义。
      * <p>
-     * 注：当前播放侧调用恒传 isCache=false，这里预先修对，将来开缓存即生效。
+     * 直播清单防冻结：HLS/DASH 清单（.m3u8/.mpd）每次轮询内容都在变（直播滑窗推进），
+     * 一旦写进 SimpleCache（播放拉取或 preloadHls 预读都会写），后续轮询永远命中冻结快照，
+     * 滑窗播完 Exo 即抛 PlaylistStuckException——表现是「直播只能播约 1 分钟就停」。
+     * 清单体积小、缓存零收益，一律旁路直连上游；分片照常走缓存，点播预读命中不受影响。
      */
     private DataSource.Factory getCacheDataSourceFactory(DataSource.Factory upstream, Map<String, String> headers) {
         if (mCache == null) {
@@ -567,7 +574,59 @@ public final class ExoMediaSourceHelper {
         if (!keySuffix.isEmpty()) {
             factory.setCacheKeyFactory(dataSpec -> dataSpec.uri + keySuffix);
         }
-        return factory;
+        return () -> new ManifestBypassDataSource(upstream.createDataSource(), factory.createDataSource());
+    }
+
+    /** 按 DataSpec 分流：清单请求直连上游（绕过 SimpleCache），其余请求走 CacheDataSource */
+    private static final class ManifestBypassDataSource implements DataSource {
+
+        private final DataSource direct;
+        private final DataSource cached;
+        private DataSource active;
+
+        ManifestBypassDataSource(DataSource direct, DataSource cached) {
+            this.direct = direct;
+            this.cached = cached;
+        }
+
+        @Override
+        public void addTransferListener(TransferListener transferListener) {
+            direct.addTransferListener(transferListener);
+            cached.addTransferListener(transferListener);
+        }
+
+        @Override
+        public long open(DataSpec dataSpec) throws IOException {
+            // 判定基于 uri path（不含 query）：宿主代理 /m3u8/proxy.m3u8?url=... 与上游直链
+            // cdn/live/x.m3u8 都在 path 层以 .m3u8 结尾；.mpd 同理覆盖 DASH
+            String path = dataSpec.uri.getPath();
+            boolean manifest = path != null && (path.endsWith(".m3u8") || path.endsWith(".mpd"));
+            active = manifest ? direct : cached;
+            return active.open(dataSpec);
+        }
+
+        @Override
+        public int read(byte[] buffer, int offset, int length) throws IOException {
+            return active.read(buffer, offset, length);
+        }
+
+        @androidx.annotation.Nullable
+        @Override
+        public Uri getUri() {
+            return active == null ? null : active.getUri();
+        }
+
+        @Override
+        public Map<String, List<String>> getResponseHeaders() {
+            return active == null ? Collections.emptyMap() : active.getResponseHeaders();
+        }
+
+        @Override
+        public void close() throws IOException {
+            DataSource ds = active;
+            active = null;
+            if (ds != null) ds.close();
+        }
     }
 
     /** headers → 磁盘缓存 key 后缀：排序 + trim + 大小写不敏感，保证同一线路稳定命中 */
