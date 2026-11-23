@@ -961,17 +961,27 @@ public class JsExtensions {
         return args.length == 1 ? args[0] : joined.toString();
     }
 
+    /** toast 收集池：登录按钮 action 等面板链路里，脚本 toast(msg) 的提示
+     *  按 ThreadLocal 收集，HTTP handler 求值后取出拼进 result 返回前端显示 */
+    public static final ThreadLocal<StringBuilder> TOAST_LOG = new ThreadLocal<>();
+
     /** 空实现：需要 WebView 的能力在本插件不可用（对齐 node 空实现面） */
     public void toast() {
     }
 
     public void toast(Object msg) {
+        StringBuilder log = TOAST_LOG.get();
+        if (log != null && msg != null) {
+            if (log.length() > 0) log.append('\n');
+            log.append(String.valueOf(msg));
+        }
     }
 
     public void longToast() {
     }
 
     public void longToast(Object msg) {
+        toast(msg);
     }
 
     /** 繁转简（legado JsExtensions 同名 API；单字映射表见 Trans） */

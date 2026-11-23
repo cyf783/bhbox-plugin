@@ -385,7 +385,8 @@ function lgRunAction(name,action){
     body:JSON.stringify({sk:LG_CUR.key,action:action,form:form})})
     .then(function(r){return r.json()}).then(function(j){
       if(j.openUrl){window.open(j.openUrl,'_blank');st.textContent='已打开：'+j.openUrl;return}
-      st.textContent=j.ok?('执行完成'+(j.result?'：'+j.result:'')):('执行失败：'+(j.error||'未知'));
+      st.textContent=j.ok?('执行结果'+(j.result?'：\n'+j.result:'')):('执行失败：'+(j.error||'未知'));
+      st.style.whiteSpace='pre-line';
       if(!j.ok)st.classList.add('warn');
     }).catch(function(){st.classList.add('warn');st.textContent='执行失败，请重试'});
 }

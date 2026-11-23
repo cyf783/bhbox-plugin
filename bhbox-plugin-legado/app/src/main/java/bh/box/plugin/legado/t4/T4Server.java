@@ -246,9 +246,10 @@ public final class T4Server extends NanoHTTPD {
                 Map<String, Object> src = findSourceBySk(sk);
                 if (src == null) return json(Response.Status.NOT_FOUND, kv("error", "source not found"));
                 Object loginUrl = SourceManager.mapGet(src, "loginUrl");
-                String loginJs = (loginUrl instanceof String && !((String) loginUrl).trim().isEmpty()
-                        && !((String) loginUrl).trim().startsWith("http"))
-                        ? (String) loginUrl : "";
+                String lu = loginUrl instanceof String ? ((String) loginUrl).trim() : "";
+                // URL 型（http 开头）不参与 JS 拼接（按钮 action 只走 JS 型 loginUrl）
+                String loginJs = !lu.isEmpty() && !lu.startsWith("http://") && !lu.startsWith("https://")
+                        ? stripJsWrapper(lu) : "";
                 Object jsLibObj = SourceManager.mapGet(src, "jsLib");
                 String jsLib = jsLibObj instanceof String ? (String) jsLibObj : "";
                 String js = (jsLib.isEmpty() ? "" : jsLib + "\n;\n")
@@ -269,12 +270,20 @@ public final class T4Server extends NanoHTTPD {
                     b.put("source", new bh.box.plugin.legado.engine.SourceBridge(sk, src));
                 }
                 Object out;
+                // toast 收集：脚本 toast/longToast 提示拼进 result 返回面板显示
+                StringBuilder toasts = new StringBuilder();
+                bh.box.plugin.legado.engine.JsExtensions.TOAST_LOG.set(toasts);
                 try {
                     out = bh.box.plugin.legado.engine.JsEngine.eval(js, b);
                 } catch (Exception e) {
                     return json(Response.Status.OK, kv("ok", false, "error", String.valueOf(e.getMessage())));
+                } finally {
+                    bh.box.plugin.legado.engine.JsExtensions.TOAST_LOG.remove();
                 }
                 String outStr = out == null ? "" : String.valueOf(out);
+                if (toasts.length() > 0) {
+                    outStr = toasts + (outStr.isEmpty() ? "" : "\n" + outStr);
+                }
                 return json(Response.Status.OK, kv("ok", true, "result",
                         outStr.length() > 2000 ? outStr.substring(0, 2000) : outStr));
             }
@@ -446,6 +455,17 @@ public final class T4Server extends NanoHTTPD {
             if (url.equals(sk)) return src;
         }
         return null;
+    }
+
+    /** 对齐官方 BaseSource.getLoginJs：剥 @js: / <js>...</js> 包裹（原样拼接会把标签
+     *  混进 JS 源码，Rhino 报「语法错误 legado-eval.js」）；URL 型原样返回 */
+    private static String stripJsWrapper(String s) {
+        if (s == null) return "";
+        String t = s.trim();
+        if (t.isEmpty()) return "";
+        if (t.startsWith("@js:")) return t.substring(4);
+        if (t.startsWith("<js>") && t.lastIndexOf("<") > 4) return t.substring(4, t.lastIndexOf("<"));
+        return t;
     }
 
     /** 源 key → SourceBridge（properties 取该源 Map，桥复用 __bridge__ 与 JS 侧同实例） */
