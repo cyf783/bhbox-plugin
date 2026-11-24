@@ -324,12 +324,20 @@ public class ExoMediaPlayer extends com.github.catvod.plugin.player.spi.Player i
     public long getCurrentPosition() {
         if (mMediaPlayer == null)
             return 0L;
-        return mMediaPlayer.getCurrentPosition();
+        // 直播流 position 相对滑窗起点计算，窗口刷新/周期切换瞬间可能返回负值
+        // （ExoPlayer issue #8849）；滑窗越短刷新越频繁。宿主 UI 直接透传该值，
+        // 负数会显示成 00:00:-N，钳到 0。点播流 position 不会为负，钳制无副作用。
+        return Math.max(0L, mMediaPlayer.getCurrentPosition());
     }
 
     @Override
     public long getDuration() {
         if (mMediaPlayer == null)
+            return 0L;
+        // 直播流（HLS 滑窗清单）：media3 的 getDuration 返回的是当前滑动窗口长度
+        // （几个分片之和，正的小数值），宿主以 duration<=0 判定直播会漏掉这种情况。
+        // 归零后与 ijk 直播行为对齐，宿主守卫即可正确识别。
+        if (mMediaPlayer.isCurrentMediaItemLive())
             return 0L;
         return mMediaPlayer.getDuration();
     }
