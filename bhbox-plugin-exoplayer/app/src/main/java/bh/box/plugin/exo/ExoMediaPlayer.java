@@ -2,6 +2,8 @@ package bh.box.plugin.exo;
 
 import android.content.Context;
 import android.content.res.AssetFileDescriptor;
+import android.os.Handler;
+import android.os.Looper;
 import android.view.Surface;
 import android.view.SurfaceHolder;
 
@@ -76,6 +78,33 @@ public class ExoMediaPlayer extends com.github.catvod.plugin.player.spi.Player i
     private String mLastDataSource;
     /** 渲染器清单只打一次（用于确认 ffmpeg 扩展是否真的被反射加载） */
     private boolean renderersLogged;
+
+    // ── 双实例预 prepare（下一集零感知切换，见 docs/BHBox双实例预prepare方案）──
+    /** 主实例当前绑定的 Surface（setSurface 记录，swap 时转移给升级实例） */
+    @Nullable
+    private Surface mCurrentSurface;
+    /** 预热实例：preloadNext 预读完成后在此 prepare 到 READY，切集命中直接 swap 跳过 prepare */
+    @Nullable
+    private ExoPlayer mWarmPlayer;
+    @Nullable
+    private String mWarmUrl;
+    @Nullable
+    private Map<String, String> mWarmHeaders;
+    /** 预热实例是否已到 STATE_READY（可 swap）；prepare 失败/TTL 到期释放后复位 */
+    private boolean mWarmReady;
+    /** setDataSource 命中预热目标后置位，prepareAsync 时执行 swap */
+    private boolean mPendingSwap;
+    /** 预热 TTL：READY 后超过该时长未被切集使用则释放，归还解码器与内存 */
+    private static final long WARM_TTL_MS = 5 * 60 * 1000;
+    /** 预热 prepare 超时：迟迟不到 READY（源故障挂死）也释放，不长期占内存 */
+    private static final long WARM_PREPARE_TIMEOUT_MS = 60 * 1000;
+    /** 预热实例的全部操作收敛到主线程（ExoPlayer 仅允许创建线程访问） */
+    private final Handler mMainHandler = new Handler(Looper.getMainLooper());
+    @Nullable
+    private Runnable mWarmTtlRunnable;
+    /** 预热实例的静默监听器（仅记录 READY/错误）；swap 升级为主实例时必须换成 this，否则宿主收不到任何状态事件 */
+    @Nullable
+    private Player.Listener mWarmListener;
 
     public ExoMediaPlayer(Context context) {
         mAppContext = context.getApplicationContext();
@@ -203,6 +232,20 @@ public class ExoMediaPlayer extends com.github.catvod.plugin.player.spi.Player i
         // 记录最近一次下发的地址：onPlayerError（尤其 1004 Malformed URL）时补齐上下文，
         // 否则该错误只有 cause 链没有 URL，无法定位是哪个源的哪条线路
         mLastDataSource = path;
+        // 双实例预热命中判定：url + headers 均一致才可 swap（headers 参与 cache key，
+        // 内容不同则预热实例的缓冲无法复用）；失配时预热已无意义，顺手释放
+        boolean warmMatch = mWarmReady && path != null && path.equals(mWarmUrl)
+                && sameHeaders(headers, mWarmHeaders);
+        if (!warmMatch) {
+            releaseWarm();
+        }
+        mPendingSwap = warmMatch;
+        if (warmMatch) {
+            // swap 路径不需要 MediaSource，prepareAsync 时直接接管预热实例
+            mMediaSource = null;
+            LOG.i("bh-warm match，切集将 swap");
+            return;
+        }
         // 开启边播缓存：DRM 内容在 helper 内自动排除；cache key（uri + 规范化 headers 后缀）
         // 与 preloadNext 预读一致，下一集预读数据由此直接命中
         mMediaSource = mMediaSourceHelper.getMediaSource(path, headers, true, errorCode);
@@ -237,13 +280,146 @@ public class ExoMediaPlayer extends com.github.catvod.plugin.player.spi.Player i
             long start = android.os.SystemClock.elapsedRealtime();
             int bytes = helper.preload(url, copiedHeaders, ExoMediaSourceHelper.PRELOAD_MAX_BYTES, positionMs);
             LOG.i("ExoPreload bytes=" + bytes + " pos=" + positionMs + "ms cost=" + (android.os.SystemClock.elapsedRealtime() - start) + "ms");
+            if (generation != sPreloadGeneration || bytes <= 0) return;
+            // 预读成功 → 预热实例 prepare 到 READY（双实例预 prepare），供切集时直接 swap
+            mMainHandler.post(() -> {
+                if (generation != sPreloadGeneration) return;
+                startWarmPrepare(url, copiedHeaders, positionMs, generation);
+            });
         });
     }
 
     @Override
     public void clearPreload() {
+        // 仅取消在途预读任务：宿主切集序列是 clearPreload → setDataSource → prepareAsync，
+        // 若在此释放预热实例会杀掉正待 swap 的 READY 实例。warm 生命周期由
+        // setDataSource 失配释放 / 新 preloadNext 换目标释放 / TTL / release() 兜底
         sPreloadGeneration++;
         mMediaSourceHelper.cancelPreload();
+    }
+
+    // ── 预热实例管理（全部主线程执行） ──
+
+    /**
+     * 创建预热实例并 prepare 到 READY。与正式播放共用 cache factory/key（读穿预读落盘的数据），
+     * 独立 LoadControl（缩小缓冲）与 TrackSelector（media3 禁止跨实例共享）。
+     * playWhenReady=false：不渲染不发声不抢焦点，仅完成容器解析 + 解码器初始化 + 起播位置定位。
+     */
+    private void startWarmPrepare(String url, Map<String, String> headers, long positionMs, int generation) {
+        releaseWarm();
+        // 无真 Surface 时放弃预热：swap 需要在真 Surface 上 init 视频 codec
+        if (mCurrentSurface == null) {
+            LOG.i("bh-warm skip：无 Surface，降级纯预读");
+            return;
+        }
+        try {
+            DefaultTrackSelector selector = new DefaultTrackSelector(mAppContext);
+            selector.setParameters(selector.buildUponParameters()
+                    .setPreferredTextLanguage(Locale.getDefault().getISO3Language())
+                    .setForceHighestSupportedBitrate(true)
+                    .setTunnelingEnabled(isTunnel));
+            ExoPlayer warm = new ExoPlayer.Builder(mAppContext)
+                    .setLoadControl(buildWarmLoadControl())
+                    .setTrackSelector(selector)
+                    .setRenderersFactory(mRenderersFactory)
+                    .build();
+            warm.setPlayWhenReady(false);
+            // 禁用视频轨道做 audio-only prepare：视频解码器不在预热期 init。
+            // 原因（MTK 实测结论）：Surface BufferQueue 单 producer，预热实例无法绑宿主真 Surface
+            // （DECODER_INIT_FAILED）；用独立 Surface init 后 swap 迁移真 Surface 又与 media3
+            // renderer 输入流水线不兼容（迁移 flush 后 renderer 停止喂数据 → 画面冻结）。
+            // audio-only 预热同样完成容器解析/分片缓冲/音频解码器/起播位置定位，
+            // 视频解码器在 swap 后真 Surface 上走正统 init（无迁移）
+            warm.setTrackSelectionParameters(warm.getTrackSelectionParameters().buildUpon()
+                    .setTrackTypeDisabled(C.TRACK_TYPE_VIDEO, true).build());
+            warm.setMediaSource(mMediaSourceHelper.getMediaSource(url, headers, true, -1), positionMs);
+            warm.prepare();
+            mWarmPlayer = warm;
+            mWarmUrl = url;
+            mWarmHeaders = headers;
+            mWarmReady = false;
+            mWarmListener = new Player.Listener() {
+                @Override
+                public void onPlaybackStateChanged(@Player.State int state) {
+                    if (mWarmPlayer != warm) return;
+                    if (state == Player.STATE_READY) {
+                        mWarmReady = true;
+                        scheduleWarmTtl(generation, WARM_TTL_MS);
+                        LOG.i("bh-warm ready pos=" + warm.getCurrentPosition() + " dur=" + warm.getDuration());
+                    }
+                }
+
+                @Override
+                public void onPlayerError(PlaybackException error) {
+                    if (mWarmPlayer != warm) return;
+                    // 典型：低端设备 codec 并发实例不足 → 预热失败自动降级，纯预读数据仍在缓存
+                    LOG.e("bh-warm prepare failed " + error.errorCode + " (" + error.getErrorCodeName() + ")，降级纯预读");
+                    releaseWarm();
+                }
+            };
+            warm.addListener(mWarmListener);
+            scheduleWarmTtl(generation, WARM_PREPARE_TIMEOUT_MS);
+            LOG.i("bh-warm prepare start pos=" + positionMs + " url=" + url);
+        } catch (Throwable t) {
+            LOG.e("bh-warm create failed " + Util.getRootCauseMessage(t));
+            releaseWarm();
+        }
+    }
+
+    /** 预热实例专用 LoadControl：缓冲档位取最小（省内存），起播水位与主实例一致 */
+    private static LoadControl buildWarmLoadControl() {
+        return new DefaultLoadControl.Builder()
+                .setBufferDurationsMs(
+                        (int) TimeUnit.SECONDS.toMillis(15),
+                        (int) TimeUnit.SECONDS.toMillis(30),
+                        2500, 2500)
+                .setPrioritizeTimeOverSizeThresholds(true)
+                .build();
+    }
+
+    /** 释放预热实例并复位匹配状态（线程安全：非主线程时投递到主线程） */
+    private void releaseWarm() {
+        cancelWarmTtl();
+        if (mWarmPlayer == null) return;
+        Runnable release = () -> {
+            ExoPlayer warm = mWarmPlayer;
+            if (warm == null) return;
+            mWarmPlayer = null;
+            mWarmUrl = null;
+            mWarmHeaders = null;
+            mWarmReady = false;
+            mWarmListener = null;
+            try {
+                warm.release();
+            } catch (Throwable ignored) {
+            }
+            LOG.i("bh-warm released");
+        };
+        if (Looper.myLooper() == Looper.getMainLooper()) release.run();
+        else mMainHandler.post(release);
+    }
+
+    private void scheduleWarmTtl(int generation, long delayMs) {
+        cancelWarmTtl();
+        mWarmTtlRunnable = () -> {
+            if (generation != sPreloadGeneration) return;
+            LOG.i("bh-warm ttl expired，释放预热实例");
+            releaseWarm();
+        };
+        mMainHandler.postDelayed(mWarmTtlRunnable, delayMs);
+    }
+
+    private void cancelWarmTtl() {
+        if (mWarmTtlRunnable != null) {
+            mMainHandler.removeCallbacks(mWarmTtlRunnable);
+            mWarmTtlRunnable = null;
+        }
+    }
+
+    /** headers 相等判定（null 与空集等价；HashMap.equals 与顺序无关） */
+    private static boolean sameHeaders(Map<String, String> a, Map<String, String> b) {
+        if (a == null || a.isEmpty()) return b == null || b.isEmpty();
+        return a.equals(b);
     }
 
     @Override
@@ -276,6 +452,11 @@ public class ExoMediaPlayer extends com.github.catvod.plugin.player.spi.Player i
     public void prepareAsync() {
         if (mMediaPlayer == null)
             return;
+        if (mPendingSwap && mWarmPlayer != null) {
+            swapWarmToMain();
+            return;
+        }
+        mPendingSwap = false;
         if (mMediaSource == null) return;
         if (mSpeedPlaybackParameters != null) {
             mMediaPlayer.setPlaybackParameters(mSpeedPlaybackParameters);
@@ -283,6 +464,65 @@ public class ExoMediaPlayer extends com.github.catvod.plugin.player.spi.Player i
         mIsPreparing = true;
         mMediaPlayer.setMediaSource(mMediaSource);
         mMediaPlayer.prepare();
+    }
+
+    /**
+     * swap：预热实例升级为主实例，跳过 prepare（容器解析/解码器初始化已在预热期完成）。
+     * Surface 时序严格排序：先绑新实例 → 再解绑旧实例 → 最后释放旧实例，
+     * 保证旧渲染链路释放前显示目标已移交（避免黑屏/卡死）。
+     * 调用线程为主线程（宿主 prepareAsync 均在主线程）。
+     */
+    private void swapWarmToMain() {
+        mPendingSwap = false;
+        ExoPlayer warm = mWarmPlayer;
+        ExoPlayer old = mMediaPlayer;
+        if (warm == null || old == null) return;
+        cancelWarmTtl();
+        LOG.i("bh-warm swap url=" + mWarmUrl);
+        // 先释放旧实例断开其解码器的 BufferQueue producer 连接（单 producer 模型），
+        // warm 在真 Surface 上 init 视频 codec 才能成功。旧实例释放后 SurfaceView 保留最后帧，不黑屏
+        old.setVideoSurface(null);
+        old.removeListener(this);
+        old.release();
+        // 升级实例绑定真 Surface（video track 禁用中，此时尚不 init codec），
+        // 再启用视频轨道走正统 codec init——数据全在缓存，无网络往返
+        warm.setVideoSurface(mCurrentSurface);
+        warm.setTrackSelectionParameters(warm.getTrackSelectionParameters().buildUpon()
+                .setTrackTypeDisabled(C.TRACK_TYPE_VIDEO, false).build());
+        // 4) 角色互换
+        mMediaPlayer = warm;
+        mWarmPlayer = null;
+        mWarmUrl = null;
+        mWarmHeaders = null;
+        mWarmReady = false;
+        mIsPreparing = false;
+        mMediaSource = null;
+        // 关键：升级实例换上主监听器——warm 原本只挂静默监听，不换的话
+        // BUFFERING/READY/ENDED/错误全部丢失，宿主播完收不到 onCompletion 会卡死
+        if (mWarmListener != null) {
+            warm.removeListener(mWarmListener);
+            mWarmListener = null;
+        }
+        warm.addListener(this);
+        // 倍速：预热实例未带播放参数，沿用原 prepareAsync 的恢复逻辑
+        if (mSpeedPlaybackParameters != null) {
+            warm.setPlaybackParameters(mSpeedPlaybackParameters);
+        }
+        // 直接起播：宿主换集路径不会再调 start()（其内部状态机认为本次 prepareAsync 已完成），
+        // warm 保持 playWhenReady=false 的话首帧 pending、AudioTrack 不启动，表现为暂停/卡住。
+        // media3 未配置 AudioAttributes，不参与宿主音频焦点管理，不会引发焦点抢占暂停；
+        // 若宿主确有补暂停（mPendingPause），后续 pause() 在 true 起播后仍正常生效
+        warm.setPlayWhenReady(true);
+        // 5) 手动补发宿主状态机依赖的事件（跳过了真实 prepare 流程，宿主需离开 STATE_PREPARING）
+        if (mEventListener != null) {
+            mEventListener.onPrepared();
+            mEventListener.onInfo(PLAYER_INFO_RENDERING_START, 0);
+            VideoSize size = warm.getVideoSize();
+            if (size.width > 0) {
+                mVideoWidth = size.width;
+                mEventListener.onVideoSizeChanged(size.width, size.height);
+            }
+        }
     }
 
     @Override
@@ -306,6 +546,9 @@ public class ExoMediaPlayer extends com.github.catvod.plugin.player.spi.Player i
     @Override
     public void release() {
         clearPreload();
+        // clearPreload 已收窄为取消预读任务，warm 释放由 release 兜底（页面退出最终出口）
+        releaseWarm();
+        mCurrentSurface = null;
         if (mMediaPlayer != null) {
             mMediaPlayer.removeListener(this);
             mMediaPlayer.release();
@@ -367,6 +610,8 @@ public class ExoMediaPlayer extends com.github.catvod.plugin.player.spi.Player i
 
     @Override
     public void setSurface(Surface surface) {
+        // 记录最新 Surface：swap 时作为预热实例的迁移目标（宿主 addDisplay/rebindSurface 最终都落到这里）
+        mCurrentSurface = surface;
         if (mMediaPlayer != null) {
             mMediaPlayer.setVideoSurface(surface);
         }
